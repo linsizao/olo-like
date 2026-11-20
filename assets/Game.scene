@@ -1,0 +1,7 @@
+[
+  {"__type__":"cc.SceneAsset","_name":"Game","scene":{"__id__":1}},
+  {"__type__":"cc.Scene","_name":"Game","_children":[{"__id__":2}],"_active":true,"autoReleaseAssets":false,"_globals":{"__id__":4},"_id":"06019e82-bfcf-4d01-98f3-43e98618e5a3"},
+  {"__type__":"cc.Node","_name":"olo-like","_parent":{"__id__":1},"_children":[],"_active":true,"_components":[{"__id__":3}],"_layer":33554432,"_id":"TwinBanksRoot"},
+  {"__type__":"a6b74AAAABAAIAAAAAAAAAB","node":{"__id__":2},"_enabled":true,"_id":"TwinBanksGame"},
+  {"__type__":"cc.SceneGlobals"}
+]

@@ -1,0 +1,8 @@
+node_modules/
+library/
+temp/
+local/
+profiles/
+build/
+.DS_Store
+project.private.config.json

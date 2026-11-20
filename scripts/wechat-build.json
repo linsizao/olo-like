@@ -1,0 +1,5 @@
+{
+  "platform":"wechatgame", "outputName":"wechatgame", "mainBundleCompressionType":"merge_dep",
+  "startScene":"06019e82-bfcf-4d01-98f3-43e98618e5a3",
+  "packages":{"wechatgame":{"appid":"touristappid","orientation":"portrait","isRemoteServer":false,"wasm":false}}
+}
