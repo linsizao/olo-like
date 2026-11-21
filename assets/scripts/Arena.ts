@@ -104,6 +104,11 @@ export class Arena {
     ink.rect(0,0,field.right,field.height,palette.paper);
     ink.rect(0,field.top,field.right,field.middle-field.top,this.colors[0].zone);
     ink.rect(0,field.middle,field.right,field.bottom-field.middle,this.colors[1].zone);
+    // A short slit in the board sits beneath discs that cross the middle.
+    const half = 28*scale, radius = 2*scale, center = field.right/2;
+    ink.rect(center-half,field.middle-radius,half*2,radius*2,palette.paper);
+    ink.dot(center-half,field.middle,radius,palette.paper);
+    ink.dot(center+half,field.middle,radius,palette.paper);
     for (const player of [0,1] as Player[]) {
       const upper = player === 1, origin = spawn(player, this.layout.upperRow);
       ink.text(upper ? 55*scale : field.right-55*scale,origin.y,String(score[player]),54*scale,this.colors[player].disc,upper);

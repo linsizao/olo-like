@@ -3,11 +3,12 @@ import { field, pieceScale, Point } from './Match';
 import { boardViewport, fitBoard } from './BoardLayout';
 import { Ink, Table } from './Table';
 
+declare const wx: { exitMiniProgram?(options: { fail(): void }): void } | undefined;
 const { ccclass } = _decorator;
 
 @ccclass('GameScene')
 export class GameScene extends Component implements Ink {
-  private table = new Table(sys.localStorage);
+  private table = new Table(sys.localStorage, () => this.exitGame());
   private board!: Node;
   private marks: { node: Node; shape?: Graphics; label?: Label; key: string }[] = [];
   private cursor = 0;
@@ -15,6 +16,8 @@ export class GameScene extends Component implements Ink {
   private drawn = -1;
   private hidden = false;
   private historyActive = false;
+  private exitPending = false;
+  private backKeys = new Set<KeyCode>();
   private wasShowingBoard = false;
   private screenWidth = 0;
   private screenHeight = 0;
@@ -33,6 +36,7 @@ export class GameScene extends Component implements Ink {
     this.board.addComponent(UITransform);
     this.resize();
     input.on(Input.EventType.KEY_DOWN,this.keyDown,this);
+    input.on(Input.EventType.KEY_UP,this.keyUp,this);
     this.browser?.addEventListener('popstate',this.popState);
     screen.on('window-resize', this.resize, this);
     this.node.on(Node.EventType.TOUCH_START, this.begin, this);
@@ -61,7 +65,20 @@ export class GameScene extends Component implements Ink {
     this.board.getComponent(UITransform)!.setContentSize(width, field.height);
   }
   private keyDown(event:EventKeyboard) {
-    if ([KeyCode.ESCAPE,KeyCode.BACKSPACE,KeyCode.MOBILE_BACK].includes(event.keyCode)) this.table.back();
+    if (this.hidden || ![KeyCode.ESCAPE,KeyCode.BACKSPACE,KeyCode.MOBILE_BACK].includes(event.keyCode)) return;
+    if (this.backKeys.has(event.keyCode)) return;
+    this.backKeys.add(event.keyCode);
+    this.table.back();
+  }
+  private keyUp(event:EventKeyboard) { this.backKeys.delete(event.keyCode); }
+  private exitGame() {
+    if (typeof wx === 'undefined' || typeof wx.exitMiniProgram !== 'function') return false;
+    if (!this.exitPending) {
+      this.exitPending = true;
+      try { wx.exitMiniProgram({ fail: () => { this.exitPending = false; } }); }
+      catch { this.exitPending = false; }
+    }
+    return true;
   }
   private popState=() => {
     if (this.table.inSeries) {
@@ -81,6 +98,7 @@ export class GameScene extends Component implements Ink {
   }
   onDestroy() {
     input.off(Input.EventType.KEY_DOWN,this.keyDown,this);
+    input.off(Input.EventType.KEY_UP,this.keyUp,this);
     this.browser?.removeEventListener('popstate',this.popState);
     this.table.audio.dispose(); screen.off('window-resize', this.resize, this); game.off(Game.EVENT_HIDE, this.hide, this); game.off(Game.EVENT_SHOW, this.show, this); }
   private point(event: EventTouch) {
@@ -91,8 +109,8 @@ export class GameScene extends Component implements Ink {
   private drag(event: EventTouch) { if (this.finger === (event.getID() ?? 0)) this.table.move(this.point(event)); }
   private release(event: EventTouch) { if (this.finger === (event.getID() ?? 0)) { this.table.up(this.point(event)); this.finger = null; } }
   private cancel(event: EventTouch) { if (this.finger === (event.getID() ?? 0)) { this.finger = null; this.table.cancel(); } }
-  private hide() { this.hidden = true; this.finger = null; this.table.background(); }
-  private show() { this.hidden = false; this.table.foreground(); }
+  private hide() { this.hidden = true; this.finger = null; this.backKeys.clear(); this.table.background(); }
+  private show() { this.hidden = false; this.exitPending = false; this.table.foreground(); }
   update(seconds: number) {
     if (this.hidden) return;
     this.table.tick(seconds);

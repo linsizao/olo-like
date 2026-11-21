@@ -9,6 +9,10 @@ export type { Ink } from './Arena';
 
 type Page = 'menu'|'play'|'pause'|'rules'|'result'|'settings'|'records';
 type Control = { id:string; x:number; y:number; width:number; height:number; run:()=>void };
+// Board units at a design height of 1024. Either seated player can pull toward themselves.
+const seamHitRadius = 28;
+const seamSlop = 6;
+const pausePullDistance = 42;
 const menuPalette = [[18,137,145],[180,127,34],[207,84,90],[60,117,163]];
 function menuColor(time:number) {
   const phase=time/4, index=Math.floor(phase)%menuPalette.length;
@@ -30,12 +34,13 @@ export class Table {
   private controls: Control[] = [];
   private pressed = '';
   private start: Point | null = null;
+  private seamGap: number | null = null;
   private scroll = 0;
   private scrollStart = 0;
   private slider: 'musicVolume'|'soundVolume'|null = null;
   private tr = (zh:string,en:string) => this.profile.options.english ? en : zh;
   private sound = (name:string,force?:number,size?:number) => this.audio.cue(name,force,size);
-  constructor(storage?: StoragePort) {
+  constructor(storage?: StoragePort, private requestExit?: () => boolean) {
     this.profile = new Profile(storage); this.audio = new TouchAudio(this.profile.options);
     this.arena = new Arena(this.sound, [discColors.blue, discColors.red]);
   }
@@ -61,18 +66,26 @@ export class Table {
     this.sound('resume');
   }
   private pause() {
-    this.slide('pause','pause',this.motion?.gap??0,this.motion?.wash??0);
+    const gap = this.seamGap ?? this.motion?.gap ?? 0;
+    const wash = this.seamGap !== null ? gap/pauseGap : this.motion?.wash ?? 0;
+    this.seamGap = null;
+    this.slide('pause','pause',gap,wash);
     this.sound('pause');
   }
   private resume() { this.slide('resume','play',pauseGap,1); this.sound('resume'); }
   private leave() {
-    if (this.page==='pause') this.slide('leave','menu',pauseGap,1);
+    if (this.page==='pause') this.slide('leave','menu',this.motion?.gap??pauseGap,this.motion?.wash??1);
     else this.go('menu');
     this.seriesWins=[0,0];
   }
   back() {
     if (this.page==='play') { this.pause(); return true; }
-    if (this.motion || this.page==='pause') return true;
+    if (this.page==='pause') {
+      this.cancel();
+      if (!this.requestExit?.()) this.leave();
+      return true;
+    }
+    if (this.motion) return true;
     if (this.page==='result') { this.leave(); return true; }
     if (this.page==='menu') return false;
     this.go('menu'); return true;
@@ -80,10 +93,14 @@ export class Table {
   background() { if (this.page==='play') this.pause(); this.cancel(); this.audio.sleep(true); }
   foreground() { this.audio.sleep(false); }
   cancel() {
+    if (this.seamGap) this.motion = new BoardTransition('resume',this.seamGap,this.seamGap/pauseGap);
+    this.seamGap = null;
     this.arena.cancel(); this.pressed=''; this.start=null; this.slider=null; this.revision++;
   }
   private hit(point:Point) { return this.controls.find(control=>Math.abs(point.x-control.x)<=control.width/2 && Math.abs(point.y-control.y)<=control.height/2); }
-  private atEdge(point:Point) { return Math.min(point.x,field.right-point.x)<=field.right*.065; }
+  private startsAtSeam(point: Point) {
+    return Math.abs(point.y-field.middle) <= seamHitRadius;
+  }
   down(point:Point) {
     this.audio.unlock(); this.start=point; this.revision++;
     if (this.motion) { this.start=null; return; }
@@ -94,7 +111,7 @@ export class Table {
       return;
     }
     if (this.page === 'rules') this.scrollStart=this.scroll;
-    if (this.page === 'play' && !this.atEdge(point)) this.arena.down(point);
+    if (this.page === 'play' && !this.startsAtSeam(point)) this.arena.down(point);
   }
   private setVolume(point:Point) {
     if (!this.slider) return;
@@ -105,21 +122,28 @@ export class Table {
     if (this.slider) { this.setVolume(point); return; }
     if (this.pressed) return;
     if (this.page === 'rules') this.scroll=bounded(this.scrollStart+this.start.y-point.y,0,(rules.length-1)*105-535);
-    if (this.page === 'play') this.arena.move(point);
+    if (this.page === 'play') {
+      if (this.startsAtSeam(this.start)) {
+        const dy = Math.abs(point.y-this.start.y);
+        if (this.seamGap === null) {
+          const dx = Math.abs(point.x-this.start.x);
+          if (Math.max(dx,dy) <= seamSlop) return;
+          if (dx > dy) { this.start = null; return; }
+        }
+        this.seamGap = bounded((dy-seamSlop)/field.middle,0,pauseGap);
+      } else this.arena.move(point);
+    }
     this.revision++;
   }
   up(point:Point) {
     if (!this.start) return;
-    if (this.page==='play' && this.atEdge(this.start)) {
-      const dx=point.x-this.start.x, dy=point.y-this.start.y;
-      const inward=this.start.x<field.right/2?dx:-dx;
-      if (inward>field.right*.15 && Math.abs(dy)<inward*.6) {
-        this.back(); return;
-      }
-      // Reserve dots also live at the edge. Commit their tap after ruling out a back swipe.
-      if (Math.hypot(dx,dy)<field.right*.045) this.arena.down(this.start);
-    }
     this.move(point);
+    if (!this.start) return;
+    if (this.seamGap !== null) {
+      if (this.seamGap*field.middle >= pausePullDistance) this.pause();
+      else this.cancel();
+      return;
+    }
     const pressed=this.pressed, hit=this.hit(point), slider=this.slider;
     this.pressed=''; this.start=null; this.slider=null;
     if (slider) { this.sound('select'); return; }
@@ -137,7 +161,7 @@ export class Table {
     if (this.motion) {
       this.motion.elapsed+=dt;
       if (this.motion.elapsed>=this.motion.duration) this.motion=null;
-    } else if (this.page==='play') {
+    } else if (this.page==='play' && this.seamGap===null) {
       this.arena.tick(dt);
       if (this.match.phase==='over') {
         if (!this.roundRecorded) {
@@ -158,7 +182,7 @@ export class Table {
     const width=field.right, center=width/2, scale=pieceScale(width), tr=this.tr, colors=palette;
     const label=(y:number,value:string,size:number,color=colors.ink,x=center) => ink.text(x,y,value,size*scale,color);
     const register=(id:string,x:number,y:number,w:number,h:number,run:()=>void) => {
-      if (!this.motion) this.controls.push({id,x,y,width:w,height:h,run});
+      if (!this.motion && this.seamGap===null) this.controls.push({id,x,y,width:w,height:h,run});
     };
     const link=(id:string,x:number,y:number,value:string,run:()=>void,w:number,h:number,size=28,color=colors.ink) => {
       label(y,value,this.pressed===id?size*0.94:size,color,x); register(id,x,y,w,h,run);
@@ -168,9 +192,9 @@ export class Table {
     const title=(name:string) => label(170,name,52);
     const home=()=>this.go('menu');
     const motion=this.motion, kind=motion?.kind;
-    if (this.page==='play' && !motion) { this.arena.draw(ink); return; }
+    if (this.page==='play' && !motion && !this.seamGap) { this.arena.draw(ink); return; }
     const showMenu=this.page==='menu' || kind==='enter';
-    const showPause=this.page==='pause' || kind==='resume';
+    const showPause=this.page==='pause' || kind==='resume' || this.seamGap!==null;
     const showResult=this.page==='result' || kind==='next';
     const [lower,upper]=this.lastRound;
     const resultColor=lower===upper?'#56989D':this.arena.colors[lower>upper?0:1].disc;
@@ -208,8 +232,9 @@ export class Table {
       link('continue',width*.30,y,tr('继续','Continue'),()=>showResult?this.begin(true):this.resume(),width*.38,110,42,colors.paper);
       link('menu',width*.70,y,tr('菜单','Menu'),()=>this.leave(),width*.38,110,42,colors.paper);
     }
-    if (motion || this.page==='pause') {
-      const gap=motion?.gap??pauseGap, wash=motion?.wash??1;
+    if (motion || showPause) {
+      const gap = this.seamGap ?? motion?.gap ?? pauseGap;
+      const wash = this.seamGap !== null ? gap/pauseGap : motion?.wash ?? 1;
       if (gap<1) {
         const shadow=(1-bounded(gap/(showPause || kind==='leave'?pauseGap:.84),0,1))*.63;
         if (gap>0 && shadow>0) ink.rect(0,field.middle*(1-gap),width,field.height*gap,

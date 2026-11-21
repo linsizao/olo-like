@@ -12,13 +12,20 @@ export const pauseGap = 1/3;
 export class BoardTransition {
   elapsed = 0;
   constructor(readonly kind: Movement, private startGap: number, private startWash: number) {}
-  get duration() { return travel[travel.length-1][0]; }
+  private get timeScale() {
+    // Settle a hand-pulled seam over its remaining distance.
+    if (this.kind==='resume') return Math.max(.25,this.startGap/pauseGap);
+    if (this.kind==='pause' && this.startGap<=pauseGap) return Math.max(.25,1-this.startGap/pauseGap);
+    return 1;
+  }
+  get duration() { return travel[travel.length-1][0]*this.timeScale; }
   get progress() {
+    const time = this.elapsed/this.timeScale;
     for (let i=1;i<travel.length;i++) {
       const [t,value]=travel[i];
-      if (this.elapsed>t) continue;
+      if (time>t) continue;
       const [prev,from]=travel[i-1];
-      return from+(value-from)*(this.elapsed-prev)/(t-prev);
+      return from+(value-from)*(time-prev)/(t-prev);
     }
     return 1;
   }
