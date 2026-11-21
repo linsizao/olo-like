@@ -5,11 +5,12 @@ export type Cue = 'hit' | 'wall' | 'enter' | 'gain' | 'loss' | 'return' | 'captu
 export type Impact = { cue: Cue; point: Point; player: Player; size: number; force: number; id: number };
 export type Disc = Point & Piece & { vx: number; vy: number; owner: Player; entered: boolean };
 export const field = { left: 0, right: 768, top: 171, bottom: 853, middle: 512, height: 1024 };
+export const pieceScale = (width: number) => Math.min(1, width/768);
 export const radii = [16, 33, 50];
 const masses = [1, 2, 3.8];
 const speeds = [2.12, 1.96, 1.8];
 export const step = 1 / 120;
-export const spawn = (player: Player): Point => ({ x: field.right / 2, y: player === 0 ? 938.5 : 85.5 });
+export const spawn = (player: Player, upperRow = field.top / 2): Point => ({ x: field.right / 2, y: player === 0 ? field.height-upperRow : upperRow });
 const onColoredField = (disc: Point) => disc.y >= field.top && disc.y <= field.bottom;
 export const scoring = (disc: Disc) => disc.owner === 0 ? disc.y >= field.top && disc.y < field.middle : disc.y > field.middle && disc.y <= field.bottom;
 const rack = (origin: Player): Piece[] => [2, 1, 0, 1, 2, 0].map((size, index) => ({ id: index + origin * 6, origin, size, returns: 0 }));
@@ -49,10 +50,19 @@ export class Match {
   }
   shots = 0;
   carry = 0;
-  resize(width: number) {
-    for (const disc of this.discs) disc.x *= width / field.right;
-    field.right = width;
-    [16, 33, 50].forEach((radius, index) => { radii[index] = radius * width / 768; });
+  resize(width: number, strip = field.top, animationPoints: Point[] = []) {
+    if (width === field.right && strip === field.top) return;
+    const points = [...this.discs, ...this.events.map(e => e.point), ...animationPoints];
+    for (const point of points) {
+      point.x *= width / field.right;
+      if (strip === field.top) continue;
+      // Keep each disc in the same launch or scoring zone when the window changes.
+      if (point.y <= field.top) point.y = point.y / field.top * strip;
+      else if (point.y >= field.bottom) point.y = field.height - (field.height-point.y)/field.top*strip;
+      else point.y = field.middle + (point.y-field.middle)/(field.middle-field.top)*(field.middle-strip);
+    }
+    field.right = width; field.top = strip; field.bottom = field.height-strip;
+    [16, 33, 50].forEach((radius, index) => { radii[index] = radius*pieceScale(width); });
   }
   private settledScore: [number, number] = [0, 0];
   private confirmed = new Set<number>();

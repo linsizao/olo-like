@@ -1,6 +1,6 @@
 import { Arena, bounded, Ink, palette } from './Arena';
 import { BoardTransition, blendColor, Movement, pauseGap, splitInk } from './BoardTransition';
-import { field, Player, Point } from './Match';
+import { field, pieceScale, Player, Point } from './Match';
 import { Profile, StoragePort } from './Profile';
 import { rules } from './Rules';
 import { discColors, pickPlayerColors } from './PlayerColors';
@@ -44,6 +44,7 @@ export class Table {
     this.cancel(); this.controls = []; this.page = page; this.revision++;
   }
   get inSeries() { return this.page==='play' || this.page==='pause' || this.page==='result'; }
+  get showsBoard() { return this.inSeries || this.motion?.kind==='leave'; }
   private slide(kind:Movement, page:Page, gap:number, wash:number) {
     this.go(page);
     this.motion=new BoardTransition(kind,gap,wash);
@@ -51,7 +52,9 @@ export class Table {
   private begin(next=false) {
     const starter:Player=next?(1-this.match.starter) as Player:0;
     if (!next) this.seriesWins=[0,0];
+    const layout = this.arena.layout;
     this.arena=new Arena(this.sound, next ? this.arena.colors : pickPlayerColors());
+    this.arena.layout = layout;
     this.match.player=this.match.starter=starter;
     this.roundRecorded=false;
     this.slide(next?'next':'enter','play',1,.24);
@@ -152,7 +155,7 @@ export class Table {
   }
   draw(ink:Ink) {
     this.controls=[];
-    const width=field.right, center=width/2, scale=width/768, tr=this.tr, colors=palette;
+    const width=field.right, center=width/2, scale=pieceScale(width), tr=this.tr, colors=palette;
     const label=(y:number,value:string,size:number,color=colors.ink,x=center) => ink.text(x,y,value,size*scale,color);
     const register=(id:string,x:number,y:number,w:number,h:number,run:()=>void) => {
       if (!this.motion) this.controls.push({id,x,y,width:w,height:h,run});
@@ -198,8 +201,8 @@ export class Table {
       if (showResult) {
         ink.text(center,296,String(upper),280*scale,colors.paper,true,true);
         ink.text(center,728,String(lower),280*scale,colors.paper,false,true);
-        ink.text(width*.072,85,String(this.seriesWins[1]),30*scale,colors.paper,true);
-        ink.text(width*.928,939,String(this.seriesWins[0]),30*scale,colors.paper);
+        ink.text(width*.072,this.arena.layout.upperRow,String(this.seriesWins[1]),30*scale,colors.paper,true);
+        ink.text(width*.928,field.height-this.arena.layout.upperRow,String(this.seriesWins[0]),30*scale,colors.paper);
       }
       const y=showResult?491:512;
       link('continue',width*.30,y,tr('继续','Continue'),()=>showResult?this.begin(true):this.resume(),width*.38,110,42,colors.paper);

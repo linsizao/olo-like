@@ -67,6 +67,11 @@ export function splitInk(ink: Ink, gap: number, wash: number, colors: PlayerColo
         ink.dot(x,y+offset,r,fill,{height,upper:false});
       }
     },
+    polygon(points,color) {
+      // Shattered discs are entirely within one end of the board.
+      const dy = points[0].y < seam ? -offset : offset;
+      ink.polygon(points.map(p => ({ x:p.x, y:p.y+dy })), muted(color.slice(0,7))+color.slice(7));
+    },
     text(x,y,value,size,color,inverted) {
       ink.text(x,y+(y<seam?-offset:offset),value,size,muted(color),inverted);
     }
