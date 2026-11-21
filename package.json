@@ -1,4 +1,4 @@
 {
   "name": "olo-like", "private": true, "uuid": "86403d1a-4416-469b-b45e-2674faa9ccfb",
-  "creator": {"version":"3.8.6"}, "scripts": {"build":"node scripts/build.cjs", "test":"node --experimental-strip-types --test tests/settlement.test.cjs"}
+  "creator": {"version":"3.8.6"}, "scripts": {"build":"node scripts/build.cjs", "test":"node --experimental-strip-types --test tests/*.test.cjs"}
 }

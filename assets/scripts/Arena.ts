@@ -1,4 +1,5 @@
 import { field, Impact, Match, Player, Point, radii, scoring, spawn } from './Match';
+import { LaunchDrag } from './LaunchDrag';
 
 export interface Ink {
   rect(x: number, y: number, width: number, height: number, color: string): void;
@@ -22,17 +23,14 @@ export type Sound = (name: string, force?: number, size?: number) => void;
 export const bounded = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 export class Arena {
   match = new Match();
-  grip: Point | null = null;
-  delta = { x: 0, y: 0 };
+  private drag: LaunchDrag | null = null;
   effects: Flash[] = [];
   clock = 0;
   private arrival = 0;
   constructor(private sound: Sound) {}
   get scale() { return field.right / 768; }
-  get distance() { return Math.hypot(this.delta.x, this.delta.y); }
-  get power() { return Math.min(1,this.distance / (field.height * 0.27)); }
   get busy() { return this.effects.some(effect => effect.cue !== 'hit'); }
-  cancel() { this.grip = null; this.delta = { x:0, y:0 }; }
+  cancel() { this.drag = null; }
   private reserves(player: Player) {
     const active = this.match.phase === 'ready' && this.match.player === player;
     return this.match.stock[player].map((piece,index)=>({piece,index})).filter(entry=>!active || entry.index!==this.match.chosen);
@@ -51,24 +49,26 @@ export class Arena {
       if (best <= 16*this.scale && game.choose(closest)) { this.arrival=0; this.sound('select',1,game.selected); return false; }
     }
     if (Math.hypot(point.x-origin.x,point.y-origin.y) > Math.max(36*this.scale,radii[game.selected]*1.55)) return false;
-    this.grip = point; this.delta = {x:0,y:0}; this.sound('select'); return true;
+    this.drag = new LaunchDrag(point, origin, field.height * 0.27);
+    this.sound('select'); return true;
   }
   move(point: Point) {
-    if (this.grip) this.delta = { x:point.x-this.grip.x, y:point.y-this.grip.y };
+    this.drag?.move(point);
   }
-  private held() {
-    const origin = spawn(this.match.player), radius = radii[this.match.selected];
-    return { x:bounded(origin.x+this.delta.x,radius,field.right-radius), y:this.match.player === 0
-      ? bounded(origin.y+this.delta.y,field.bottom,1024-radius) : bounded(origin.y+this.delta.y,radius,field.top) };
+  private shooterCenter() {
+    if (!this.drag) return spawn(this.match.player);
+    const radius = radii[this.match.selected], lower = this.match.player === 0;
+    return this.drag.center(radius, field.right-radius, lower ? field.bottom : radius,
+      lower ? field.height-radius : field.top);
   }
   up(point: Point) {
-    if (!this.grip) return false;
-    this.move(point); const length = this.distance, power = this.power, size = this.match.selected;
-    const forward = this.delta.y * (this.match.player === 0 ? -1 : 1) > 0;
-    const speed = 1290*power;
-    const fired = length >= 14 && forward && this.match.fire(this.held(), {x:this.delta.x*speed/length,y:this.delta.y*speed/length});
-    if (fired) this.sound('release',power,size);
-    this.cancel(); return fired;
+    if (!this.drag) return false;
+    this.move(point);
+    const shot = this.drag.release(this.match.player), origin = this.shooterCenter(), size = this.match.selected;
+    this.cancel();
+    if (!shot || !this.match.fire(origin, shot.velocity)) return false;
+    this.sound('release',shot.power,size);
+    return true;
   }
   tick(dt: number) {
     this.clock += dt;
@@ -108,10 +108,10 @@ export class Arena {
       ink.dot(disc.x,disc.y,radii[disc.size],colors[disc.owner]);
     }
     if (showShooter && game.phase === 'ready' && !this.busy) {
-      const where = this.grip ? this.held() : spawn(game.player), radius = radii[game.selected];
+      const where = this.shooterCenter(), radius = radii[game.selected];
       const offscreen = game.player === 0 ? field.height+radius*2 : -radius*2;
       where.y += (offscreen-where.y)*Math.pow(1-this.arrival/flightTime,3);
-      const pulse = this.grip ? 0 : (1+Math.sin(this.clock*2.8))*0.024;
+      const pulse = this.drag ? 0 : (1+Math.sin(this.clock*2.8))*0.024;
       [1.53+pulse,1.32+pulse/2,1.08].forEach((factor,index)=>ink.dot(where.x,where.y,radius*factor,halos[game.player][index]));
       ink.dot(where.x,where.y,radius,colors[game.player]);
     }
