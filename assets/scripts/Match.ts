@@ -1,6 +1,8 @@
 export type Player = 0 | 1;
 export type Point = { x: number; y: number };
-type Piece = { size: number; returns: number };
+export type Piece = { id: number; size: number; returns: number; origin: Player };
+export type Cue = 'hit' | 'wall' | 'enter' | 'gain' | 'loss' | 'return' | 'capture' | 'death' | 'misfire';
+export type Impact = { cue: Cue; point: Point; player: Player; size: number; force: number; id: number };
 export type Disc = Point & Piece & { vx: number; vy: number; owner: Player; entered: boolean };
 export const field = { left: 0, right: 768, top: 171, bottom: 853, middle: 512, height: 1024 };
 export const radii = [16, 33, 50];
@@ -8,8 +10,10 @@ const masses = [1, 2, 3.8];
 const speeds = [2.12, 1.96, 1.8];
 export const step = 1 / 120;
 export const spawn = (player: Player): Point => ({ x: field.right / 2, y: player === 0 ? 938.5 : 85.5 });
+const onColoredField = (disc: Point) => disc.y >= field.top && disc.y <= field.bottom;
 export const scoring = (disc: Disc) => disc.owner === 0 ? disc.y >= field.top && disc.y < field.middle : disc.y > field.middle && disc.y <= field.bottom;
-const rack = (): Piece[] => [2, 1, 0, 1, 2, 0].map(size => ({ size, returns: 0 }));
+const rack = (origin: Player): Piece[] => [2, 1, 0, 1, 2, 0].map((size, index) => ({ id: index + origin * 6, origin, size, returns: 0 }));
+const tally = () => ({ shots: 0, hits: 0, returns: 0, captures: 0, goals: 0, deaths: 0 });
 
 export function collide(first: Disc, second: Disc) {
   const diffX = second.x - first.x, diffY = second.y - first.y;
@@ -25,15 +29,24 @@ export function collide(first: Disc, second: Disc) {
   const impulse = -1.9 * approach / (invFirst + invSecond);
   first.vx -= normalX * impulse * invFirst; first.vy -= normalY * impulse * invFirst;
   second.vx += normalX * impulse * invSecond; second.vy += normalY * impulse * invSecond;
+  return -approach;
 }
 
 export class Match {
   player: Player = 0;
   starter: Player = 0;
   phase: 'ready' | 'moving' | 'over' = 'ready';
-  stock = [rack(), rack()];
+  stock = [rack(0), rack(1)];
+  stats = [tally(), tally()];
+  events: Impact[] = [];
+  chosen = 0;
   discs: Disc[] = [];
-  get selected() { return this.stock[this.player][0]?.size ?? 0; }
+  get piece() { return this.stock[this.player][this.chosen]; }
+  get selected() { return this.piece?.size ?? 0; }
+  choose(index: number) {
+    if (this.phase !== 'ready' || !this.stock[this.player][index]) return false;
+    this.chosen = index; return true;
+  }
   shots = 0;
   carry = 0;
   resize(width: number) {
@@ -42,56 +55,105 @@ export class Match {
     [16, 33, 50].forEach((radius, index) => { radii[index] = radius * width / 768; });
   }
   private settledScore: [number, number] = [0, 0];
+  private confirmed = new Set<number>();
+  private emit(cue: Cue, disc: Disc, force = 1) {
+    this.events.push({ cue, point: { x: disc.x, y: disc.y }, size: disc.size, player: disc.owner, force, id: disc.id });
+  }
+  private retire(disc:Disc, cue:'misfire'|'death') {
+    this.stats[disc.owner].deaths++; this.emit(cue,disc);
+  }
   score(): readonly [number, number] { return this.settledScore; }
   private recount() {
     const points: [number, number] = [0, 0];
     for (const disc of this.discs) {
-      if (scoring(disc)) points[disc.owner]++;
+      if (scoring(disc)) {
+        points[disc.owner]++;
+        if (!this.confirmed.has(disc.id)) { this.stats[disc.owner].goals++; this.emit('gain', disc); }
+      }
     }
+    for (const id of this.confirmed) {
+      const disc = this.discs.find(item => item.id === id);
+      if (disc && !scoring(disc)) this.emit('loss', disc);
+    }
+    this.confirmed = new Set(this.discs.filter(scoring).map(disc => disc.id));
     this.settledScore = points;
   }
   fire(origin: Point, velocity: Point) {
     const speed = Math.hypot(velocity.x, velocity.y);
     if (this.phase !== 'ready' || !Number.isFinite(speed) || speed < 48) return false;
-    const piece = this.stock[this.player].shift();
+    const piece = this.stock[this.player].splice(this.chosen, 1)[0];
     if (!piece) return false;
-    const factor = Math.min(2000 / speed, speeds[piece.size]);
-    this.discs.push({ ...origin, ...piece, owner: this.player, entered: false, vx: velocity.x * factor, vy: velocity.y * factor });
-    this.shots++; this.phase = 'moving'; this.carry = 0;
+    const factor = Math.min(2300 / speed, speeds[piece.size]);
+    this.discs.push({ ...origin, ...piece, owner: this.player, entered: onColoredField(origin), vx: velocity.x * factor, vy: velocity.y * factor });
+    this.stats[this.player].shots++; this.shots++; this.phase = 'moving'; this.carry = 0; this.chosen = 0;
     return true;
+  }
+  private rebound(disc: Disc) {
+    const radius = radii[disc.size];
+    const x = Math.max(field.left + radius, Math.min(field.right - radius, disc.x));
+    const y = Math.max(radius, Math.min(field.height - radius, disc.y));
+    let force = 0;
+    if ((disc.x - x) * disc.vx > 0) {
+      force = Math.abs(disc.vx);
+      disc.vx *= -0.84;
+    }
+    if ((disc.y - y) * disc.vy > 0) {
+      force = Math.max(force, Math.abs(disc.vy));
+      disc.vy *= -0.84;
+    }
+    disc.x = x;
+    disc.y = y;
+    if (force > 48) this.emit('wall', disc, force);
+  }
+  private settleTurn() {
+    this.recount();
+    this.discs = this.discs.filter(disc => {
+      if (onColoredField(disc)) return true;
+      if (!disc.entered) {
+        this.retire(disc, 'misfire');
+      } else if (disc.returns >= 3) {
+        this.retire(disc, 'death');
+      } else {
+        const receiver = disc.y < field.top ? 1 : 0;
+        this.stock[receiver].push({ id: disc.id, origin: disc.origin, size: disc.size, returns: disc.returns + 1 });
+        if (receiver === disc.owner) {
+          this.stats[receiver].returns++;
+          this.emit('return', disc);
+        } else {
+          this.stats[receiver].captures++;
+          this.emit('capture', disc);
+        }
+      }
+      return false;
+    });
+    this.phase = this.stock.every(queue => !queue.length) ? 'over' : 'ready';
+    const other = (1 - this.player) as Player;
+    if (this.stock[other].length) this.player = other;
   }
   advance(seconds: number) {
     if (this.phase !== 'moving') return;
     this.carry += Math.min(0.1, Math.max(0, seconds));
     while (this.carry >= step && this.phase === 'moving') {
       this.carry -= step;
+      const inside = new Set(this.discs.filter(scoring).map(disc => disc.id));
       for (const disc of this.discs) {
         disc.x += disc.vx * step; disc.y += disc.vy * step;
-        const radius = radii[disc.size];
-        if (disc.x < field.left + radius) { disc.x = field.left + radius; disc.vx = Math.abs(disc.vx) * 0.84; }
-        if (disc.x > field.right - radius) { disc.x = field.right - radius; disc.vx = -Math.abs(disc.vx) * 0.84; }
         const speed = Math.hypot(disc.vx, disc.vy);
         const factor = speed ? Math.max(0, speed * 0.984 - 0.95) / speed : 0;
         disc.vx *= factor; disc.vy *= factor;
       }
       for (let first = 0; first < this.discs.length; first++) {
-        for (let second = first + 1; second < this.discs.length; second++) collide(this.discs[first], this.discs[second]);
-      }
-      this.discs = this.discs.filter(disc => {
-        if (disc.y >= field.top && disc.y <= field.bottom) { disc.entered = true; return true; }
-        if (!disc.entered) return disc.y >= 0 && disc.y <= field.height;
-        if (disc.returns < 3) this.stock[disc.y < field.top ? 1 : 0].push({ size: disc.size, returns: disc.returns + 1 });
-        return false;
-      });
-      if (this.discs.every(disc => !disc.vx && !disc.vy)) {
-        this.discs = this.discs.filter(disc => disc.entered);
-        this.recount();
-        this.phase = this.stock.every(queue => !queue.length) ? 'over' : 'ready';
-        if (this.phase === 'ready') {
-          const other = (1 - this.player) as Player;
-          if (this.stock[other].length) this.player = other;
+        for (let second = first + 1; second < this.discs.length; second++) {
+          const force = collide(this.discs[first], this.discs[second]);
+          if (force && force > 5) { this.stats[this.player].hits++; this.emit('hit', this.discs[second], force); }
         }
       }
+      for (const disc of this.discs) {
+        this.rebound(disc);
+        if (onColoredField(disc)) disc.entered = true;
+        if (scoring(disc) && !inside.has(disc.id)) this.emit('enter', disc);
+      }
+      if (this.discs.every(disc => !disc.vx && !disc.vy)) this.settleTurn();
     }
   }
   rematch() {
