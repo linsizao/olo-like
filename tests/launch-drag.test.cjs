@@ -13,12 +13,12 @@ for (const player of [0, 1]) {
       game.player = player;
       const center = spawn(player), direction = player ? 1 : -1;
       const touch = { x:center.x+7, y:center.y-3 };
-      const drag = new LaunchDrag(touch, center, reach);
+      const drag = new LaunchDrag(touch, center, reach, player ? field.top : field.bottom);
       const x = touch.x + side*176, y = touch.y - direction*32;
       push(drag, x, touch.y);          // Lateral placement.
       push(drag, x, y);                // Pull back without lifting.
       push(drag, x, y + direction*24); // Still behind the original touch.
-      const shot = drag.release(player);
+      const shot = drag.release();
       assert(shot);
       assert.equal(shot.velocity.x, 0);
       assert.equal(Math.sign(shot.velocity.y), direction);
@@ -37,11 +37,11 @@ for (const player of [0, 1]) {
 test('the same diagonal push has the same angle and power after any lateral approach', () => {
   const center = spawn(0);
   function release(sideTravel, steps) {
-    const drag = new LaunchDrag(center, center, reach);
+    const drag = new LaunchDrag(center, center, reach, field.bottom);
     const x = center.x + sideTravel;
     push(drag,x,center.y);
     for (let i=1;i<=steps;i++) push(drag,x+48*i/steps,center.y-64*i/steps);
-    return drag.release(0);
+    return drag.release();
   }
   const baseline = release(0,1);
   assert(baseline);
@@ -53,33 +53,66 @@ test('the same diagonal push has the same angle and power after any lateral appr
 });
 
 test('a final turn steers the shot, and a long push past the strip can still reach full power', () => {
-  const center = spawn(0), drag = new LaunchDrag(center,center,reach);
+  const center = spawn(0), drag = new LaunchDrag(center,center,reach,field.bottom);
   push(drag,210,center.y);
   push(drag,250,center.y-80);
   push(drag,250,center.y-400);
-  const shot=drag.release(0);
+  const shot=drag.release();
   assert.deepEqual(shot,{power:1,velocity:{x:0,y:-1290}});
   assert.deepEqual(drag.center(50,field.right-50,field.bottom,field.height-50),{x:250,y:field.bottom});
 });
 
 test('placing, tapping, a tiny forward nudge, or ending with a reversal does not fire', () => {
-  const center=spawn(0), drag=new LaunchDrag(center,center,reach);
-  assert.equal(drag.release(0),null);
+  const center=spawn(0), drag=new LaunchDrag(center,center,reach,field.bottom);
+  assert.equal(drag.release(),null);
   push(drag,100,center.y);
-  assert.equal(drag.release(0),null);
+  assert.equal(drag.release(),null);
   push(drag,100,center.y-6);
-  assert.equal(drag.release(0),null);
+  assert.equal(drag.release(),null);
   push(drag,100,center.y-80);
   push(drag,100,center.y-59);
-  assert.equal(drag.release(0),null);
+  assert.equal(drag.release(),null);
 });
 
 test('a deliberately shallow bank shot can be launched after repositioning', () => {
-  const center=spawn(0), drag=new LaunchDrag(center,center,reach);
+  const center=spawn(0), drag=new LaunchDrag(center,center,reach,field.bottom);
   push(drag,120,center.y);
   push(drag,220,center.y-8);
-  const shot=drag.release(0);
+  const shot=drag.release();
   assert(shot);
   assert(Math.abs(shot.velocity.y/shot.velocity.x + .08)<1e-10);
   assert.equal(shot.power,Math.hypot(100,8)/reach);
 });
+
+for (const player of [0, 1]) {
+  const forward = player === 0 ? -1 : 1;
+  const line = player === 0 ? field.bottom : field.top;
+  for (const distance of [150, 600]) {
+    test(`player ${player} releases in a scoring zone after drifting sideways and back at lift-off (${distance})`, () => {
+      const origin = spawn(player), drag = new LaunchDrag(origin, origin, reach, line);
+      push(drag, 160, origin.y);
+      const end = { x: 160 + distance / 4, y: origin.y + forward * distance };
+      push(drag, end.x, end.y);
+      const stroke = drag.release();
+      assert(stroke);
+      for (let i = 1; i <= 90; i++) push(drag, end.x + i * 4, end.y);
+      push(drag, end.x + 360, end.y - forward * 7);
+      assert.deepEqual(drag.release(), stroke);
+      const displayed = drag.center(16, field.right - 16, player ? 16 : line, player ? line : field.height - 16);
+      assert.deepEqual(displayed, { x: 160 + Math.abs(line - origin.y) / 4, y: line });
+      const match = new Match();
+      match.player = player;
+      assert(match.fire(displayed, stroke.velocity));
+      assert.equal(match.shots, 1);
+    });
+  }
+  test(`player ${player} can pull back into the launch strip to cancel and reposition`, () => {
+    const origin = spawn(player), drag = new LaunchDrag(origin, origin, reach, line);
+    push(drag, origin.x, line + forward * 75);
+    push(drag, origin.x, origin.y);
+    push(drag, origin.x - 80, origin.y);
+    assert.equal(drag.release(), null);
+    push(drag, origin.x - 80, origin.y + forward * 24);
+    assert.equal(drag.release().power, 24 / reach);
+  });
+}

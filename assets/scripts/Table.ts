@@ -3,6 +3,7 @@ import { BoardTransition, blendColor, Movement, pauseGap, splitInk } from './Boa
 import { field, Player, Point } from './Match';
 import { Profile, StoragePort } from './Profile';
 import { rules } from './Rules';
+import { discColors, pickPlayerColors } from './PlayerColors';
 import { TouchAudio } from './TouchAudio';
 export type { Ink } from './Arena';
 
@@ -36,7 +37,7 @@ export class Table {
   private sound = (name:string,force?:number,size?:number) => this.audio.cue(name,force,size);
   constructor(storage?: StoragePort) {
     this.profile = new Profile(storage); this.audio = new TouchAudio(this.profile.options);
-    this.arena = new Arena(this.sound);
+    this.arena = new Arena(this.sound, [discColors.blue, discColors.red]);
   }
   get match() { return this.arena.match; }
   private go(page: Page) {
@@ -50,7 +51,7 @@ export class Table {
   private begin(next=false) {
     const starter:Player=next?(1-this.match.starter) as Player:0;
     if (!next) this.seriesWins=[0,0];
-    this.arena=new Arena(this.sound);
+    this.arena=new Arena(this.sound, next ? this.arena.colors : pickPlayerColors());
     this.match.player=this.match.starter=starter;
     this.roundRecorded=false;
     this.slide(next?'next':'enter','play',1,.24);
@@ -126,7 +127,7 @@ export class Table {
     if (this.page==='play') this.arena.up(point);
     this.revision++;
   }
-  private winningTrack() { const [blue,red]=this.match.score(); return blue===red ? 'draw' : blue>red ? 'blue' : 'red'; }
+  private winningTrack() { const [lower,upper]=this.match.score(); return lower===upper ? 'draw' : lower>upper ? 'blue' : 'red'; }
   tick(seconds:number) {
     const dt=bounded(seconds,0,0.1); this.revision++;
     if (this.page==='menu' || this.motion?.kind==='enter') this.menuTime+=dt;
@@ -138,8 +139,8 @@ export class Table {
       if (this.match.phase==='over') {
         if (!this.roundRecorded) {
           this.lastRound=this.match.score();
-          const [blue,red]=this.lastRound;
-          if (blue!==red) this.seriesWins[blue>red?0:1]++;
+          const [lower,upper]=this.lastRound;
+          if (lower!==upper) this.seriesWins[lower>upper?0:1]++;
           this.profile.finish(this.lastRound);
           this.roundRecorded=true;
         }
@@ -168,8 +169,8 @@ export class Table {
     const showMenu=this.page==='menu' || kind==='enter';
     const showPause=this.page==='pause' || kind==='resume';
     const showResult=this.page==='result' || kind==='next';
-    const [blue,red]=this.lastRound;
-    const resultColor=blue===red?'#56989D':blue>red?colors.blue:colors.red;
+    const [lower,upper]=this.lastRound;
+    const resultColor=lower===upper?'#56989D':this.arena.colors[lower>upper?0:1].disc;
     const pauseColor='#EADF66';
     const progress=motion?.progress??1;
     const menuTint=menuColor(this.menuTime);
@@ -195,10 +196,10 @@ export class Table {
         link(id,width*(0.17+0.22*index),512,value,run,width*0.22,116,32,blendColor(backdrop,colors.paper,opacity)));
     } else if (showPause || showResult) {
       if (showResult) {
-        ink.text(center,296,String(red),280*scale,colors.paper,true,true);
-        ink.text(center,728,String(blue),280*scale,colors.paper,false,true);
-        ink.text(width*.16,85,tr('红方总胜 ','Red wins ')+this.seriesWins[1],30*scale,colors.paper,true);
-        ink.text(width*.84,939,tr('蓝方总胜 ','Blue wins ')+this.seriesWins[0],30*scale,colors.paper);
+        ink.text(center,296,String(upper),280*scale,colors.paper,true,true);
+        ink.text(center,728,String(lower),280*scale,colors.paper,false,true);
+        ink.text(width*.072,85,String(this.seriesWins[1]),30*scale,colors.paper,true);
+        ink.text(width*.928,939,String(this.seriesWins[0]),30*scale,colors.paper);
       }
       const y=showResult?491:512;
       link('continue',width*.30,y,tr('继续','Continue'),()=>showResult?this.begin(true):this.resume(),width*.38,110,42,colors.paper);
@@ -210,7 +211,7 @@ export class Table {
         const shadow=(1-bounded(gap/(showPause || kind==='leave'?pauseGap:.84),0,1))*.63;
         if (gap>0 && shadow>0) ink.rect(0,field.middle*(1-gap),width,field.height*gap,
           '#000000'+Math.round(shadow*255).toString(16).padStart(2,'0'));
-        this.arena.draw(splitInk(ink,gap,wash),kind!=='enter' && kind!=='next');
+        this.arena.draw(splitInk(ink,gap,wash,this.arena.colors),kind!=='enter' && kind!=='next');
       }
       return;
     }
@@ -233,7 +234,7 @@ export class Table {
       };
       const slider=(key:'musicVolume'|'soundVolume',y:number)=>{
         const amount=opts[key], left=width*0.15, length=width*0.7;
-        ink.rect(left,y-2,length,4,colors.mist); ink.rect(left,y-2,length*amount,4,colors.blue);
+        ink.rect(left,y-2,length,4,colors.mist); ink.rect(left,y-2,length*amount,4,colors.accent);
         ink.dot(left+length*amount,y,10*scale,colors.ink); label(y+30,Math.round(amount*100)+'%',19,colors.muted);
         register(key,center,y,length+22*scale,48,()=>{});
       };
@@ -245,7 +246,7 @@ export class Table {
       title(tr('对局记录','Match records'));
       const record=this.profile.ledger;
       label(350,String(record.games),85); label(425,tr('已完成对局','Completed matches'),26,colors.muted);
-      label(527,tr('蓝胜   /   平局   /   红胜','Blue wins   /   Draws   /   Red wins'),24,colors.muted);
+      label(527,tr('下方胜   /   平局   /   上方胜','Lower wins   /   Draws   /   Upper wins'),24,colors.muted);
       label(582,[record.blue,record.draws,record.red].join('       '),45);
       label(678,tr('累计得分','Lifetime points')+'     '+record.bluePoints+' : '+record.redPoints,28);
       label(742,tr('最高连胜','Longest streak')+'     '+record.best,28);

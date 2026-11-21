@@ -1,5 +1,6 @@
 import { Ink, palette } from './Arena';
 import { field } from './Match';
+import type { PlayerColors } from './PlayerColors';
 
 export type Movement = 'enter' | 'pause' | 'resume' | 'leave' | 'finish' | 'next';
 type Sample = readonly [number, number];
@@ -46,10 +47,10 @@ export function blendColor(from:string,to:string,amount:number) {
 }
 
 // Translate the two clipped halves of the same frozen board, including pieces crossing the seam.
-export function splitInk(ink: Ink, gap: number, wash: number): Ink {
+export function splitInk(ink: Ink, gap: number, wash: number, colors: PlayerColors): Ink {
   const seam=field.middle, offset=gap*seam;
   const muted=(color:string) => blendColor(color,color===palette.paper?'#FFFFFF':
-    color===palette.ice || color===palette.rose?'#F5F5FA':'#D4D4D9',wash);
+    color===colors[0].zone || color===colors[1].zone?'#F5F5FA':'#D4D4D9',wash);
   return {
     rect(x,y,w,h,color) {
       const top=Math.min(y+h,seam)-y, bottom=y+h-Math.max(y,seam);

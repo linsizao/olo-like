@@ -1,19 +1,13 @@
 import { field, Impact, Match, Player, Point, radii, scoring, spawn } from './Match';
 import { LaunchDrag } from './LaunchDrag';
+import { discColors, PlayerColors } from './PlayerColors';
 
 export interface Ink {
   rect(x: number, y: number, width: number, height: number, color: string): void;
   dot(x: number, y: number, radius: number, color: string, cut?: { height: number; upper: boolean }): void;
   text(x: number, y: number, value: string, size: number, color: string, inverted?: boolean, thin?: boolean): void;
 }
-export const palette = { blue:'#29BAE3', red:'#FF4848', ice:'#B3E7F5', rose:'#FFC9C9', paper:'#FFFFFF', ink:'#233B42', muted:'#587079', mist:'#EDF4F4' };
-const colors = [palette.blue,palette.red], zones = [palette.ice,palette.rose];
-const halos = [['#E8F7FB','#C2EAF6','#9EDFF2'],['#FFF0F0','#FFD9D9','#FFBBBB']];
-export function boardPaper(ink:Ink) {
-  ink.rect(0,0,field.right,field.height,palette.paper);
-  ink.rect(0,field.top,field.right,field.middle-field.top,palette.ice);
-  ink.rect(0,field.middle,field.right,field.bottom-field.middle,palette.rose);
-}
+export const palette = { paper:'#FFFFFF', ink:'#233B42', muted:'#587079', mist:'#EDF4F4', accent:discColors.blue.disc };
 type Flash = Impact & { age: number };
 const flightTime = 0.34;
 const durations = { hit:0.16, return:0.52, capture:0.62, misfire:0.48, death:0.75 };
@@ -27,7 +21,7 @@ export class Arena {
   effects: Flash[] = [];
   clock = 0;
   private arrival = 0;
-  constructor(private sound: Sound) {}
+  constructor(private sound: Sound, readonly colors: PlayerColors) {}
   get scale() { return field.right / 768; }
   get busy() { return this.effects.some(effect => effect.cue !== 'hit'); }
   cancel() { this.drag = null; }
@@ -49,7 +43,7 @@ export class Arena {
       if (best <= 16*this.scale && game.choose(closest)) { this.arrival=0; this.sound('select',1,game.selected); return false; }
     }
     if (Math.hypot(point.x-origin.x,point.y-origin.y) > Math.max(36*this.scale,radii[game.selected]*1.55)) return false;
-    this.drag = new LaunchDrag(point, origin, field.height * 0.27);
+    this.drag = new LaunchDrag(point, origin, field.height * 0.27, player === 0 ? field.bottom : field.top);
     this.sound('select'); return true;
   }
   move(point: Point) {
@@ -64,7 +58,7 @@ export class Arena {
   up(point: Point) {
     if (!this.drag) return false;
     this.move(point);
-    const shot = this.drag.release(this.match.player), origin = this.shooterCenter(), size = this.match.selected;
+    const shot = this.drag.release(), origin = this.shooterCenter(), size = this.match.selected;
     this.cancel();
     if (!shot || !this.match.fire(origin, shot.velocity)) return false;
     this.sound('release',shot.power,size);
@@ -94,26 +88,28 @@ export class Arena {
   }
   draw(ink: Ink, showShooter = true) {
     const game = this.match, score = game.score(), scale = this.scale;
-    boardPaper(ink);
+    ink.rect(0,0,field.right,field.height,palette.paper);
+    ink.rect(0,field.top,field.right,field.middle-field.top,this.colors[0].zone);
+    ink.rect(0,field.middle,field.right,field.bottom-field.middle,this.colors[1].zone);
     for (const player of [0,1] as Player[]) {
       const upper = player === 1, origin = spawn(player);
-      ink.text((upper ? 55 : 713)*scale,origin.y,String(score[player]),54*scale,colors[player],upper);
+      ink.text((upper ? 55 : 713)*scale,origin.y,String(score[player]),54*scale,this.colors[player].disc,upper);
       this.reserves(player).forEach(({piece},slot) => {
         if (this.effects.some(effect => (effect.cue==='return'||effect.cue==='capture') && effect.id===piece.id)) return;
-        ink.dot(this.rackX(slot,player),origin.y,[2.1,3.6,5.2][piece.size]*scale,colors[player]);
+        ink.dot(this.rackX(slot,player),origin.y,[2.1,3.6,5.2][piece.size]*scale,this.colors[player].disc);
       });
     }
     for (const disc of game.discs) {
       if (scoring(disc)) ink.dot(disc.x,disc.y,radii[disc.size]+8*scale,palette.paper);
-      ink.dot(disc.x,disc.y,radii[disc.size],colors[disc.owner]);
+      ink.dot(disc.x,disc.y,radii[disc.size],this.colors[disc.owner].disc);
     }
     if (showShooter && game.phase === 'ready' && !this.busy) {
       const where = this.shooterCenter(), radius = radii[game.selected];
       const offscreen = game.player === 0 ? field.height+radius*2 : -radius*2;
       where.y += (offscreen-where.y)*Math.pow(1-this.arrival/flightTime,3);
       const pulse = this.drag ? 0 : (1+Math.sin(this.clock*2.8))*0.024;
-      [1.53+pulse,1.32+pulse/2,1.08].forEach((factor,index)=>ink.dot(where.x,where.y,radius*factor,halos[game.player][index]));
-      ink.dot(where.x,where.y,radius,colors[game.player]);
+      [1.53+pulse,1.32+pulse/2,1.08].forEach((factor,index)=>ink.dot(where.x,where.y,radius*factor,this.colors[game.player].halo[index]));
+      ink.dot(where.x,where.y,radius,this.colors[game.player].disc);
     }
     for (const effect of this.effects) this.drawEffect(ink,effect);
   }
@@ -125,7 +121,7 @@ export class Arena {
       const tip = point.y-direction*(1-reach)*155;
       if (age < 0.56) {
         const shrink = 1-bounded((age-0.31)/0.25,0,1);
-        ink.dot(point.x,point.y,Math.max(0.2,radius*shrink),colors[player]);
+        ink.dot(point.x,point.y,Math.max(0.2,radius*shrink),this.colors[player].disc);
       }
       for (let joint=0; joint<4; joint++) {
         const x = point.x+joint*4*scale, y = tip-direction*joint*24*scale;
@@ -141,25 +137,25 @@ export class Arena {
       const x=point.x+(destination.x-point.x)*ease, y=point.y+(destination.y-point.y)*ease+arc;
       const radius=radii[effect.size]*(1-ease)+[2.1,3.6,5.2][effect.size]*scale*ease;
       if (capture) {
-        ink.dot(x,y,radius+4*scale*(1-ease),colors[receiver]);
-        ink.dot(x,y,radius,colors[player]);
-        ink.dot(x,y,radius*bounded(progress/0.33,0,1),colors[receiver]);
+        ink.dot(x,y,radius+4*scale*(1-ease),this.colors[receiver].disc);
+        ink.dot(x,y,radius,this.colors[player].disc);
+        ink.dot(x,y,radius*bounded(progress/0.33,0,1),this.colors[receiver].disc);
       } else {
-        ink.dot(x,y,radius*(1+0.32*Math.sin(Math.PI*progress)),halos[player][1]);
-        ink.dot(x,y,radius,colors[player]);
+        ink.dot(x,y,radius*(1+0.32*Math.sin(Math.PI*progress)),this.colors[player].halo[1]);
+        ink.dot(x,y,radius,this.colors[player].disc);
       }
     } else if (cue === 'misfire') {
       const progress=bounded(age/durations.misfire,0,1), radius=radii[effect.size];
       const body=1-bounded((progress-0.16)/0.46,0,1);
       const y=bounded(point.y,radius,field.height-radius);
       if (body>0) {
-        ink.dot(point.x,y,radius*body*(1+0.12*Math.sin(Math.PI*progress*2)),colors[player]);
-        ink.dot(point.x,y,radius*body*progress,halos[player][1]);
+        ink.dot(point.x,y,radius*body*(1+0.12*Math.sin(Math.PI*progress*2)),this.colors[player].disc);
+        ink.dot(point.x,y,radius*body*progress,this.colors[player].halo[1]);
       }
       const burst=bounded((progress-0.25)/0.75,0,1);
       if (burst>0) for (let index=0; index<7; index++) {
         const angle=index*Math.PI*2/7, reach=radius*(0.55+burst*1.1);
-        ink.dot(point.x+Math.cos(angle)*reach,y+Math.sin(angle)*reach,radius*0.14*(1-burst),colors[player]);
+        ink.dot(point.x+Math.cos(angle)*reach,y+Math.sin(angle)*reach,radius*0.14*(1-burst),this.colors[player].disc);
       }
     } else if (cue === 'hit') {
       const spread = radii[effect.size]+age*68*scale;

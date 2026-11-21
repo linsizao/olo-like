@@ -12,7 +12,7 @@
 | --- | --- |
 | [GameScene.ts](../assets/scripts/GameScene.ts) | 创建正交相机与棋盘节点，将触摸位置换算为棋盘坐标；将画圆、画矩形和文字指令转换为 Cocos Graphics / Label，并处理窗口变更、前后台和触摸取消。 |
 | [Table.ts](../assets/scripts/Table.ts) | 主菜单与对局流转、暂停、连续多局比分、结算及记录。菜单的「双人」创建一组新的本地双人对局。 |
-| [Arena.ts](../assets/scripts/Arena.ts) | 管理选子、拖动、发射和棋盘绘制。[LaunchDrag.ts](../assets/scripts/LaunchDrag.ts) 保留手指与球心的接触偏移，从松手前连续向前的轨迹计算力度，并用末段方向发射。上下镜像的单色小圆点只显示后备子。 |
+| [Arena.ts](../assets/scripts/Arena.ts) | 管理选子、拖动、发射和棋盘绘制。[LaunchDrag.ts](../assets/scripts/LaunchDrag.ts) 保留手指与球心的接触偏移，从松手前连续向前的轨迹计算力度，并用末段方向发射。球心到达白区内沿后固定在交点，手指可继续划过得分区；在得分区内保留最近一次有效前推。上下镜像的单色小圆点只显示后备子。 |
 | [Profile.ts](../assets/scripts/Profile.ts) / [TouchAudio.ts](../assets/scripts/TouchAudio.ts) | Cocos 本地存储保存偏好和战绩。音乐与音效由浏览器或微信 Web Audio 在设备上合成；首个手势解锁声音，后台停声，不支持音频或震动时不影响规则。 |
 | [Match.ts](../assets/scripts/Match.ts) | 不依赖 Cocos。管理双方队列、发射、碰撞、反弹、回收、比分和先手。调初速度看 `speeds` 和 `fire`，调碰撞看 `masses` 和 `collide`，调滑行衰减看 `advance`。 |
 
@@ -20,7 +20,7 @@
 
 **切屏与暂停。** [BoardTransition.ts](../assets/scripts/BoardTransition.ts) 沿棋盘中线裁切并平移两半。进场、暂停、恢复、结算、下一局和退回菜单共用进场的 0.56 秒位移曲线。棋盘的褪色和恢复也跟随同一进度。暂停后中央色带占屏高三分之一。切屏期间 `Table` 驱动动画，暂停物理、效果计时和拖动输入。开局先合拢，再由 `Arena` 播放准备球入场。浏览器返回、Esc、从任一侧边缘向内滑和切后台都进入同一暂停流程。
 
-**连续对局。** `Table` 在每局全场停稳且库存耗尽时记录一次本局分和胜局，平局双方都不加胜局。结算页两端的大数字显示本局分，角落显示各自的累计胜局。「继续」保留胜局并轮换先手，「菜单」结束本组。设备历史战绩单独由 `Profile` 保存。
+**连续对局。** `Table` 在每局全场停稳且库存耗尽时记录一次本局分和胜局，平局双方都不加胜局。结算页两端的大数字显示本局分，角落显示各自的累计胜局。[PlayerColors.ts](../assets/scripts/PlayerColors.ts) 为每组新对局从四种颜色中无放回抽取两色，按固定座位分配。「继续」保留颜色和胜局并轮换先手，「菜单」结束本组。设备历史战绩单独由 `Profile` 保存。
 
 **出球和反馈。** `Arena` 在开局、换手或换子时让待发球从玩家一端滑入，落位后接受拖动。`Match` 用 `entered` 记录圆片是否进过彩色区。全场停稳后，始终没离开本方发射区的球触发 `misfire`，原地收缩、碎裂并播放低音。进过彩色区且停回己方白区的球触发 `return`，带光环飞回库存并播放上行音。停在对方白区触发 `capture`，变为接收方颜色再飞入其库存，伴随先降后升的滑音。已复用三次的球最终留在白区时触发 `death` 骨指动画。库存飞行动画用圆片 ID 对应落点，动画完成后开放下一次输入或展示结算。音色由 [TouchAudio.ts](../assets/scripts/TouchAudio.ts) 合成，对局中只播放事件音效。
 
