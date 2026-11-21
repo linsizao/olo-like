@@ -44,6 +44,7 @@ export class GameScene extends Component implements Ink {
     this.node.on(Node.EventType.TOUCH_END, this.release, this);
     this.node.on(Node.EventType.TOUCH_CANCEL, this.cancel, this);
     game.on(Game.EVENT_HIDE, this.hide, this); game.on(Game.EVENT_SHOW, this.show, this);
+    this.table.audio.start();
   }
   private resize() {
     const size = screen.windowSize;

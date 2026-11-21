@@ -13,12 +13,14 @@ type Control = { id:string; x:number; y:number; width:number; height:number; run
 const seamHitRadius = 28;
 const seamSlop = 6;
 const pausePullDistance = 42;
-const menuPalette = [[18,137,145],[180,127,34],[207,84,90],[60,117,163]];
+const menuLinkSize = 42;
+const menuRowSpacing = 88;
+const menuPalette = [discColors.blue.zone, discColors.green.zone, discColors.yellow.zone, discColors.red.zone];
 function menuColor(time:number) {
   const phase=time/4, index=Math.floor(phase)%menuPalette.length;
   const from=menuPalette[index], to=menuPalette[(index+1)%menuPalette.length];
-  const t=phase%1, blend=t*t*(3-2*t);
-  return '#'+from.map((value,channel)=>Math.round(value+(to[channel]-value)*blend).toString(16).padStart(2,'0')).join('');
+  const t=phase%1;
+  return blendColor(from,to,t*t*(3-2*t));
 }
 export class Table {
   page: Page = 'menu';
@@ -136,6 +138,7 @@ export class Table {
     this.revision++;
   }
   up(point:Point) {
+    this.audio.unlock();
     if (!this.start) return;
     this.move(point);
     if (!this.start) return;
@@ -174,8 +177,9 @@ export class Table {
         if (!this.arena.busy) { this.slide('finish','result',0,0); this.sound(this.winningTrack()); }
       }
     }
-    const menu=['menu','settings','records','rules'].includes(this.page);
-    this.audio.update(menu?'menu':this.page==='result'?this.winningTrack():'quiet');
+    const track = this.page==='result' ? this.winningTrack() :
+      (this.page==='play' || this.page==='pause') ? 'quiet' : 'loop';
+    this.audio.update(track);
   }
   draw(ink:Ink) {
     this.controls=[];
@@ -208,8 +212,8 @@ export class Table {
     if (showMenu) {
       if (kind==='leave' && progress<.4) {
         const fading=blendColor(colors.paper,backdrop,progress/.4);
-        label(512,tr('继续','Continue'),42,fading,width*.30);
-        label(512,tr('菜单','Menu'),42,fading,width*.70);
+        label(512,tr('继续','Continue'),menuLinkSize,fading,width*.30);
+        label(512,tr('菜单','Menu'),menuLinkSize,fading,width*.70);
       }
       const items=[
         ['start',tr('双人','2 Player'),()=>this.begin()],
@@ -219,8 +223,11 @@ export class Table {
       ] as const;
       const opacity=kind==='enter'?1-progress:
         kind==='leave'?bounded((progress-.4)/.6,0,1):1;
-      items.forEach(([id,value,run],index) =>
-        link(id,width*(0.17+0.22*index),512,value,run,width*0.22,116,32,blendColor(backdrop,colors.paper,opacity)));
+      const color=blendColor(backdrop,colors.paper,opacity);
+      items.forEach(([id,value,run],index) => {
+        const y=field.middle+(index-(items.length-1)/2)*menuRowSpacing;
+        link(id,center,y,value,run,width*.60,72,menuLinkSize,color);
+      });
     } else if (showPause || showResult) {
       if (showResult) {
         ink.text(center,296,String(upper),280*scale,colors.paper,true,true);
@@ -229,8 +236,8 @@ export class Table {
         ink.text(width*.928,field.height-this.arena.layout.resultRow,String(this.seriesWins[0]),30*scale,colors.paper);
       }
       const y=showResult?491:512;
-      link('continue',width*.30,y,tr('继续','Continue'),()=>showResult?this.begin(true):this.resume(),width*.38,110,42,colors.paper);
-      link('menu',width*.70,y,tr('菜单','Menu'),()=>this.leave(),width*.38,110,42,colors.paper);
+      link('continue',width*.30,y,tr('继续','Continue'),()=>showResult?this.begin(true):this.resume(),width*.38,110,menuLinkSize,colors.paper);
+      link('menu',width*.70,y,tr('菜单','Menu'),()=>this.leave(),width*.38,110,menuLinkSize,colors.paper);
     }
     if (motion || showPause) {
       const gap = this.seamGap ?? motion?.gap ?? pauseGap;

@@ -1,8 +1,17 @@
 import type { Options } from './Profile';
 
 interface Device { createWebAudioContext?(): AudioContext; vibrateShort?(options: { type: string }): void }
-type Host = { wx?: Device; AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext; navigator?: Navigator };
+declare const wx: Device | undefined;
+type Host = { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext; navigator?: Navigator };
 const host = globalThis as unknown as Host;
+const device = () => typeof wx === 'undefined' ? undefined : wx;
+const melodies = {
+  loop: [62,69,73,69,66,69,74,69],
+  blue: [60,64,67,72,71,72],
+  red: [62,66,69,74,73,74],
+  draw: [65,67,69,67,65,65]
+};
+type Track = keyof typeof melodies | 'quiet';
 // Frequencies in Hz. Each note has a start pitch, end pitch, offset, decay and relative gain.
 type Note = readonly [number, number, number, number, number];
 const cues: Record<string, readonly Note[]> = {
@@ -32,24 +41,34 @@ export class TouchAudio {
   private next = 0;
   private lastImpact = -1;
   private lastSignificant = -1;
-  private track = '';
+  private track?: Track;
+  private musicGain = 0;
   private hidden = false;
   constructor(private options: Options) {}
+  start() {
+    if (device()?.createWebAudioContext && this.options.music && this.options.musicVolume > 0) this.unlock();
+  }
   unlock() {
+    if (this.hidden) return;
     try {
       if (!this.context) {
         const Context = host.AudioContext || host.webkitAudioContext;
-        this.context = host.wx?.createWebAudioContext?.() || (Context ? new Context() : undefined);
-        if (this.context) { this.bed = this.context.createGain(); this.bed.gain.value = 0; this.bed.connect(this.context.destination); }
+        const context = device()?.createWebAudioContext?.() ?? (Context ? new Context() : undefined);
+        if (!context) return;
+        const bed = context.createGain();
+        bed.gain.value = 0;
+        bed.connect(context.destination);
+        this.context = context;
+        this.bed = bed;
       }
-      if (this.context && ['suspended','interrupted'].includes(this.context.state)) this.context.resume?.()?.catch?.(() => {});
+      if (this.context.state !== 'running') this.context.resume?.()?.catch?.(() => {});
     } catch {}
   }
   sleep(value: boolean) {
     this.hidden = value;
     if (value) {
       this.stop(); try { this.context?.suspend?.()?.catch?.(() => {}); } catch {}
-    }
+    } else if (this.context) this.unlock();
     this.next = 0;
   }
   stop() { for (const voice of this.voices) { try { voice.stop(); } catch {} } this.voices.clear(); }
@@ -58,16 +77,42 @@ export class TouchAudio {
     const ctx = this.context;
     if (!ctx || this.hidden || level <= 0) return;
     try {
-      const time = ctx.currentTime + offset, osc = ctx.createOscillator(), gain = ctx.createGain();
+      const time = ctx.currentTime + offset, gain = ctx.createGain();
+      const destination = music && this.bed ? this.bed : ctx.destination;
+      if (!gain.gain.setValueAtTime || !gain.gain.exponentialRampToValueAtTime || !ctx.createOscillator) {
+        this.bufferedTone(ctx,time,frequency,endPitch,duration,level,destination);
+        return;
+      }
+      const osc = ctx.createOscillator();
       osc.frequency.setValueAtTime(frequency,time);
       if (frequency !== endPitch) osc.frequency.exponentialRampToValueAtTime(endPitch,time+duration*0.8);
       gain.gain.setValueAtTime(0.0001,time);
       gain.gain.exponentialRampToValueAtTime(Math.max(0.0002,level),time+0.003);
       gain.gain.exponentialRampToValueAtTime(0.0001,time+duration);
-      osc.connect(gain); gain.connect(music && this.bed ? this.bed : ctx.destination);
+      osc.connect(gain); gain.connect(destination);
       this.voices.add(osc); osc.onended = () => { this.voices.delete(osc); osc.disconnect(); gain.disconnect(); };
       osc.start(time); osc.stop(time+duration+0.01);
     } catch {}
+  }
+  // Some WeChat WebAudio implementations expose only the current AudioParam value.
+  private bufferedTone(ctx: AudioContext, time: number, frequency: number, endPitch: number, duration: number, level: number, destination: AudioNode) {
+    const samples = new Float32Array(Math.ceil(ctx.sampleRate * duration));
+    let phase = 0;
+    for (let index = 0; index < samples.length; index++) {
+      const elapsed = index / ctx.sampleRate;
+      const pitch = frequency * Math.pow(endPitch / frequency, Math.min(1, elapsed / (duration * 0.8)));
+      const envelope = Math.min(1, elapsed / 0.003) * Math.exp(-6 * elapsed / duration);
+      samples[index] = Math.sin(phase) * level * envelope;
+      phase += 2 * Math.PI * pitch / ctx.sampleRate;
+    }
+    const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate);
+    buffer.copyToChannel(samples, 0, 0);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(destination);
+    this.voices.add(source);
+    source.onended = () => { this.voices.delete(source); source.disconnect(); };
+    source.start(time);
   }
   private hiss(ctx: AudioContext, volume: number) {
     const duration = 0.19;
@@ -101,7 +146,8 @@ export class TouchAudio {
   cue(name: string, force = 1, size = 1) {
     if (this.hidden) return;
     if (this.options.haptic && (name === 'release' || name === 'shatter' || (name === 'hit' && force > 560))) {
-      try { if (host.wx?.vibrateShort) host.wx.vibrateShort({type:'light'}); else host.navigator?.vibrate?.(12); } catch {}
+      const native = device();
+      try { if (native?.vibrateShort) native.vibrateShort({type:'light'}); else host.navigator?.vibrate?.(12); } catch {}
     }
     const ctx = this.context;
     if (!ctx || !this.options.sound || !this.options.soundVolume) return;
@@ -132,28 +178,26 @@ export class TouchAudio {
       this.tone(start*transpose,offset,duration,gain*level,false,end*transpose);
     }
   }
-  update(track: string) {
+  update(track: Track) {
     const ctx = this.context;
-    if (!ctx || !this.bed || this.hidden) return;
-    if (track === 'quiet') {
-      if (this.track !== track) {
-        this.bed.gain.cancelScheduledValues(ctx.currentTime);
-        this.bed.gain.setValueAtTime(0,ctx.currentTime);
-        this.track = track;
-      }
-      return;
+    if (!ctx || !this.bed || this.hidden || ctx.state !== 'running') return;
+    const gain = this.bed.gain, now = ctx.currentTime;
+    const active = track !== 'quiet' && this.options.music && this.options.musicVolume > 0;
+    const target = active ? this.options.musicVolume * (now - this.lastSignificant < 0.3 ? 0.48 : 1) : 0;
+    if (this.musicGain !== target) {
+      gain.cancelScheduledValues?.(now);
+      if (target > 0 && gain.setTargetAtTime) gain.setTargetAtTime(target,now,0.08);
+      else if (gain.setValueAtTime) gain.setValueAtTime(target,now);
+      else gain.value = target;
+      this.musicGain = target;
     }
-    const active = this.options.music && this.options.musicVolume > 0;
     if (this.track !== track) { this.track = track; this.beat = 0; this.next = 0; }
-    const target = active ? this.options.musicVolume * (ctx.currentTime - this.lastSignificant < 0.3 ? 0.48 : 1) : 0;
-    this.bed.gain.setTargetAtTime(target,ctx.currentTime,0.08);
-    if (!active || ctx.currentTime < this.next) return;
-    const menu = track === 'menu', result = ['blue','red','draw'].includes(track);
-    if (result && this.beat >= 6) return;
-    const melody = menu ? [62,69,73,69,66,69,74,69] : track === 'blue' ? [60,64,67,72,71,72] : track === 'red' ? [62,66,69,74,73,74] : [65,67,69,67,65,65];
+    if (track === 'quiet' || !active || now < this.next) return;
+    const melody = melodies[track], loop = track === 'loop';
+    if (!loop && this.beat >= melody.length) return;
     const midi = melody[this.beat % melody.length];
     this.tone(440*Math.pow(2,(midi-69)/12),0,0.68,0.065,true);
     if (this.beat % 4 === 0) this.tone(440*Math.pow(2,(midi-81)/12),0,1.1,0.05,true);
-    this.beat++; this.next = ctx.currentTime+(menu ? 0.62 : 0.46);
+    this.beat++; this.next = now+(loop ? 0.62 : 0.46);
   }
 }
