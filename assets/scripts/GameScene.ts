@@ -1,6 +1,6 @@
 import { _decorator, Camera, Canvas, Color, Component, EventKeyboard, EventTouch, game, Game, Graphics, input, Input, KeyCode, Label, Layers, Node, ResolutionPolicy, screen, sys, UITransform, view } from 'cc';
 import { field, pieceScale, Point } from './Match';
-import { fitBoard, wechatClearance } from './BoardLayout';
+import { boardViewport, fitBoard } from './BoardLayout';
 import { Ink, Table } from './Table';
 
 const { ccclass } = _decorator;
@@ -50,11 +50,11 @@ export class GameScene extends Component implements Ink {
     this.table.cancel(); this.finger = null;
   }
   private fitControls() {
-    const inset = wechatClearance(this.screenHeight/(screen.devicePixelRatio || 1), field.height);
+    const viewport = boardViewport(this.screenHeight/(screen.devicePixelRatio || 1));
     const viewportWidth = Math.max(1, field.height*this.screenWidth/(this.screenHeight || 1));
-    const width = inset ? viewportWidth : Math.min(768, viewportWidth);
+    const width = viewport.inset ? viewportWidth : Math.min(768, viewportWidth);
     const arena = this.table.arena;
-    arena.layout = fitBoard(field.height, 50*pieceScale(width), inset);
+    arena.layout = fitBoard(field.height, 50*pieceScale(width), viewport);
     arena.match.resize(width, arena.layout.strip, arena.effects.map(effect => effect.point));
     view.setDesignResolutionSize(width, field.height, ResolutionPolicy.SHOW_ALL);
     this.node.getComponent(UITransform)!.setContentSize(width, field.height);

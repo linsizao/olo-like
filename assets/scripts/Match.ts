@@ -16,13 +16,15 @@ export const scoring = (disc: Disc) => disc.owner === 0 ? disc.y >= field.top &&
 const rack = (origin: Player): Piece[] => [2, 1, 0, 1, 2, 0].map((size, index) => ({ id: index + origin * 6, origin, size, returns: 0 }));
 const tally = () => ({ shots: 0, hits: 0, returns: 0, captures: 0, goals: 0, deaths: 0 });
 
+const contactEpsilon = 1e-7;
+
 export function collide(first: Disc, second: Disc) {
   const diffX = second.x - first.x, diffY = second.y - first.y;
   const distance = Math.hypot(diffX, diffY), reach = radii[first.size] + radii[second.size];
-  if (distance >= reach) return;
+  if (distance > reach + contactEpsilon) return;
   const normalX = distance ? diffX / distance : 1, normalY = distance ? diffY / distance : 0;
   const invFirst = 1 / masses[first.size], invSecond = 1 / masses[second.size];
-  const correction = (reach - distance) / (invFirst + invSecond);
+  const correction = Math.max(0, reach - distance) / (invFirst + invSecond);
   first.x -= normalX * correction * invFirst; first.y -= normalY * correction * invFirst;
   second.x += normalX * correction * invSecond; second.y += normalY * correction * invSecond;
   const approach = (second.vx - first.vx) * normalX + (second.vy - first.vy) * normalY;
@@ -88,13 +90,55 @@ export class Match {
     this.confirmed = new Set(this.discs.filter(scoring).map(disc => disc.id));
     this.settledScore = points;
   }
+  // A held disc can reach the rim of a settled disc before its centre reaches
+  // the launch line. Recover that first contact along the intended stroke.
+  launchCenter(origin: Point, size: number, velocity?: Point): Point {
+    const forward = this.player === 0 ? -1 : 1;
+    const line = this.player === 0 ? field.bottom : field.top;
+    if ((origin.y-line)*forward > 0) return origin;
+    const radius = radii[size];
+    const speed = velocity ? Math.hypot(velocity.x,velocity.y) : 0;
+    const ux = speed && velocity ? velocity.x/speed : 0;
+    const uy = speed && velocity ? velocity.y/speed : forward;
+    let retreat = 0, straightRetreat = 0, useStroke = uy*forward > 0;
+    for (const disc of this.discs) {
+      const dx = disc.x-origin.x, dy = disc.y-origin.y, reach = radius+radii[disc.size];
+      const overlap = reach*reach - dx*dx - dy*dy;
+      if (overlap <= 0) continue;
+      const along = dx*ux + dy*uy;
+      const depth = Math.sqrt(reach*reach-dx*dx);
+      // At the home-side tangent a stroke pointing away should slide free.
+      if (dx*ux + depth*forward*uy <= 0) useStroke = false;
+      retreat = Math.max(retreat, Math.sqrt(along*along+overlap)-along);
+      straightRetreat = Math.max(straightRetreat, depth-dy*forward);
+    }
+    if (!retreat) return origin;
+    const x = origin.x-retreat*ux, y = origin.y-retreat*uy;
+    if (useStroke && x >= radius && x <= field.right-radius && y >= radius && y <= field.height-radius &&
+        this.discs.every(d => Math.hypot(x-d.x,y-d.y) >= radius+radii[d.size]-contactEpsilon)) {
+      return {x,y};
+    }
+    // Against a side rail or a cluster, keep the chosen lane and back up towards home.
+    return {x:origin.x, y:Math.max(radius, Math.min(field.height-radius, origin.y-straightRetreat*forward))};
+  }
+  private resolveContact(first: Disc, second: Disc) {
+    const force = collide(first,second);
+    if (force !== undefined && force > 5) {
+      this.stats[this.player].hits++;
+      this.emit('hit',second,force);
+    }
+  }
   fire(origin: Point, velocity: Point) {
     const speed = Math.hypot(velocity.x, velocity.y);
     if (this.phase !== 'ready' || !Number.isFinite(speed) || speed < 48) return false;
     const piece = this.stock[this.player].splice(this.chosen, 1)[0];
     if (!piece) return false;
     const factor = Math.min(2300 / speed, speeds[piece.size]);
-    this.discs.push({ ...origin, ...piece, owner: this.player, entered: onColoredField(origin), vx: velocity.x * factor, vy: velocity.y * factor });
+    const center = this.launchCenter(origin,piece.size,velocity);
+    const shot = { ...center, ...piece, owner:this.player, entered:onColoredField(center), vx:velocity.x*factor, vy:velocity.y*factor };
+    // Resolve touching discs before the first integration step can carry the shot past contact.
+    for (const disc of this.discs) this.resolveContact(disc,shot);
+    this.discs.push(shot);
     this.stats[this.player].shots++; this.shots++; this.phase = 'moving'; this.carry = 0; this.chosen = 0;
     return true;
   }
@@ -154,8 +198,7 @@ export class Match {
       }
       for (let first = 0; first < this.discs.length; first++) {
         for (let second = first + 1; second < this.discs.length; second++) {
-          const force = collide(this.discs[first], this.discs[second]);
-          if (force && force > 5) { this.stats[this.player].hits++; this.emit('hit', this.discs[second], force); }
+          this.resolveContact(this.discs[first],this.discs[second]);
         }
       }
       for (const disc of this.discs) {

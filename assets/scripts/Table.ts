@@ -201,8 +201,8 @@ export class Table {
       if (showResult) {
         ink.text(center,296,String(upper),280*scale,colors.paper,true,true);
         ink.text(center,728,String(lower),280*scale,colors.paper,false,true);
-        ink.text(width*.072,this.arena.layout.upperRow,String(this.seriesWins[1]),30*scale,colors.paper,true);
-        ink.text(width*.928,field.height-this.arena.layout.upperRow,String(this.seriesWins[0]),30*scale,colors.paper);
+        ink.text(width*.072,this.arena.layout.resultRow,String(this.seriesWins[1]),30*scale,colors.paper,true);
+        ink.text(width*.928,field.height-this.arena.layout.resultRow,String(this.seriesWins[0]),30*scale,colors.paper);
       }
       const y=showResult?491:512;
       link('continue',width*.30,y,tr('继续','Continue'),()=>showResult?this.begin(true):this.resume(),width*.38,110,42,colors.paper);

@@ -1,5 +1,5 @@
 import { field, Impact, Match, pieceScale, Player, Point, radii, scoring, spawn } from './Match';
-import { BoardLayout, classicStrip, haloPeak } from './BoardLayout';
+import { fitBoard, haloPeak } from './BoardLayout';
 import { crackTime, drawShatter, shatterTime } from './Shatter';
 import { LaunchDrag } from './LaunchDrag';
 import { discColors, PlayerColors } from './PlayerColors';
@@ -24,7 +24,7 @@ export class Arena {
   effects: Flash[] = [];
   clock = 0;
   private arrival = 0;
-  layout: BoardLayout = { strip: classicStrip, upperRow: classicStrip/2, clearance: 0, haloSpread: 1 };
+  layout = fitBoard(field.height,radii[2]);
   constructor(private sound: Sound, readonly colors: PlayerColors) {}
   get scale() { return pieceScale(field.right); }
   get busy() { return this.effects.some(effect => effect.cue !== 'hit'); }
@@ -40,12 +40,13 @@ export class Arena {
   down(point: Point) {
     const game = this.match;
     if (game.phase !== 'ready' || this.busy || this.arrival < flightTime) return false;
-    const player = game.player, origin = spawn(player, this.layout.upperRow), diff = Math.abs(point.y-origin.y);
+    const player = game.player, diff = Math.abs(point.y-spawn(player,this.layout.upperRow).y);
     if (diff < 32) {
       let closest = -1, best = Infinity;
       this.reserves(player).forEach(({index},slot) => { const distance = Math.abs(this.rackX(slot,player)-point.x); if (distance < best) { closest = index; best = distance; } });
       if (best <= 16*this.scale && game.choose(closest)) { this.arrival=0; this.sound('select',1,game.selected); return false; }
     }
+    const origin = this.shooterCenter();
     const hitRadius = radii[game.selected]*Math.min(1.55, 1+haloPeak*this.layout.haloSpread);
     if (Math.hypot(point.x-origin.x,point.y-origin.y) > Math.max(36*this.scale,hitRadius)) return false;
     this.drag = new LaunchDrag(point, origin, field.height * 0.27, player === 0 ? field.bottom : field.top);
@@ -54,17 +55,22 @@ export class Arena {
   move(point: Point) {
     this.drag?.move(point);
   }
-  private shooterCenter() {
-    if (!this.drag) return spawn(this.match.player, this.layout.upperRow);
-    const radius = radii[this.match.selected], lower = this.match.player === 0;
-    const outer = this.layout.clearance ? this.layout.clearance + radius*(1+0.53*this.layout.haloSpread) : radius;
-    return this.drag.center(radius, field.right-radius, lower ? field.bottom : outer,
-      lower ? field.height-outer : field.top);
+  private shooterCenter(velocity = this.drag?.release()?.velocity) {
+    const {player, selected} = this.match;
+    let center = spawn(player,this.layout.shooterRow);
+    if (this.drag) {
+      const radius = radii[selected], lower = player === 0;
+      const safeEdge = this.layout.clearance - (this.layout.upperRow-this.layout.shooterRow);
+      const outer = this.layout.clearance ? Math.max(radius,safeEdge+radius*(1+0.53*this.layout.haloSpread)) : radius;
+      center = this.drag.center(radius, field.right-radius, lower ? field.bottom : outer,
+        lower ? field.height-outer : field.top);
+    }
+    return this.match.launchCenter(center,selected,velocity);
   }
   up(point: Point) {
     if (!this.drag) return false;
     this.move(point);
-    const shot = this.drag.release(), origin = this.shooterCenter(), size = this.match.selected;
+    const shot = this.drag.release(), origin = this.shooterCenter(shot?.velocity), size = this.match.selected;
     this.cancel();
     if (!shot || !this.match.fire(origin, shot.velocity)) return false;
     this.sound('release',shot.power,size);
