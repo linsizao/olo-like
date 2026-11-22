@@ -3,7 +3,7 @@ export type Point = { x: number; y: number };
 export type Piece = { id: number; size: number; returns: number; origin: Player };
 export type Cue = 'hit' | 'wall' | 'enter' | 'gain' | 'loss' | 'return' | 'capture' | 'death' | 'misfire';
 export type Impact = { cue: Cue; point: Point; player: Player; size: number; force: number; id: number };
-export type Disc = Point & Piece & { vx: number; vy: number; owner: Player; entered: boolean };
+export type Disc = Point & Piece & { vx: number; vy: number; owner: Player; leftHome: boolean; collided: boolean };
 export const field = { left: 0, right: 768, top: 171, bottom: 853, middle: 512, height: 1024 };
 export const pieceScale = (width: number) => Math.min(1, width/768);
 export const radii = [16, 33, 50];
@@ -12,6 +12,7 @@ const speeds = [2.12, 1.96, 1.8];
 export const step = 1 / 120;
 export const spawn = (player: Player, upperRow = field.top / 2): Point => ({ x: field.right / 2, y: player === 0 ? field.height-upperRow : upperRow });
 const onColoredField = (disc: Point) => disc.y >= field.top && disc.y <= field.bottom;
+const outsideHome = (point: Point, owner: Player) => owner === 0 ? point.y <= field.bottom : point.y >= field.top;
 export const scoring = (disc: Disc) => disc.owner === 0 ? disc.y >= field.top && disc.y < field.middle : disc.y > field.middle && disc.y <= field.bottom;
 const rack = (origin: Player): Piece[] => [2, 1, 0, 1, 2, 0].map((size, index) => ({ id: index + origin * 6, origin, size, returns: 0 }));
 const tally = () => ({ shots: 0, hits: 0, returns: 0, captures: 0, goals: 0, deaths: 0 });
@@ -71,9 +72,6 @@ export class Match {
   private emit(cue: Cue, disc: Disc, force = 1) {
     this.events.push({ cue, point: { x: disc.x, y: disc.y }, size: disc.size, player: disc.owner, force, id: disc.id });
   }
-  private retire(disc:Disc, cue:'misfire'|'death') {
-    this.stats[disc.owner].deaths++; this.emit(cue,disc);
-  }
   score(): readonly [number, number] { return this.settledScore; }
   private recount() {
     const points: [number, number] = [0, 0];
@@ -89,6 +87,23 @@ export class Match {
     }
     this.confirmed = new Set(this.discs.filter(scoring).map(disc => disc.id));
     this.settledScore = points;
+  }
+  // Sweep the held disc between touch samples, including single moves that cross the board.
+  dragCenter(from: Point, to: Point, size: number): Point {
+    const dx = to.x-from.x, dy = to.y-from.y, distance = Math.hypot(dx,dy);
+    if (!distance) return from;
+    const ux = dx/distance, uy = dy/distance;
+    let travel = distance;
+    for (const disc of this.discs) {
+      const x = disc.x-from.x, y = disc.y-from.y;
+      const along = x*ux + y*uy;
+      if (along <= 0) continue;
+      const side = x*uy - y*ux, reach = radii[size]+radii[disc.size];
+      if (Math.abs(side) >= reach) continue;
+      const contact = along - Math.sqrt(reach*reach - side*side);
+      travel = Math.min(travel, Math.max(0,contact));
+    }
+    return travel === distance ? to : { x:from.x+ux*travel, y:from.y+uy*travel };
   }
   // A held disc can reach the rim of a settled disc before its centre reaches
   // the launch line. Recover that first contact along the intended stroke.
@@ -123,7 +138,9 @@ export class Match {
   }
   private resolveContact(first: Disc, second: Disc) {
     const force = collide(first,second);
-    if (force !== undefined && force > 5) {
+    if (force === undefined) return;
+    first.collided = second.collided = true;
+    if (force > 5) {
       this.stats[this.player].hits++;
       this.emit('hit',second,force);
     }
@@ -135,10 +152,11 @@ export class Match {
     if (!piece) return false;
     const factor = Math.min(2300 / speed, speeds[piece.size]);
     const center = this.launchCenter(origin,piece.size,velocity);
-    const shot = { ...center, ...piece, owner:this.player, entered:onColoredField(center), vx:velocity.x*factor, vy:velocity.y*factor };
+    const shot = { ...center, ...piece, owner:this.player, leftHome:outsideHome(center,this.player), collided:false, vx:velocity.x*factor, vy:velocity.y*factor };
     // Resolve touching discs before the first integration step can carry the shot past contact.
     for (const disc of this.discs) this.resolveContact(disc,shot);
     this.discs.push(shot);
+    if (scoring(shot)) this.emit('enter',shot);
     this.stats[this.player].shots++; this.shots++; this.phase = 'moving'; this.carry = 0; this.chosen = 0;
     return true;
   }
@@ -157,16 +175,16 @@ export class Match {
     }
     disc.x = x;
     disc.y = y;
+    if (force > 0) disc.collided = true;
     if (force > 48) this.emit('wall', disc, force);
   }
   private settleTurn() {
     this.recount();
     this.discs = this.discs.filter(disc => {
       if (onColoredField(disc)) return true;
-      if (!disc.entered) {
-        this.retire(disc, 'misfire');
-      } else if (disc.returns >= 3) {
-        this.retire(disc, 'death');
+      if (!disc.leftHome && !disc.collided) {
+        this.stats[disc.owner].deaths++;
+        this.emit('misfire',disc);
       } else {
         const receiver = disc.y < field.top ? 1 : 0;
         this.stock[receiver].push({ id: disc.id, origin: disc.origin, size: disc.size, returns: disc.returns + 1 });
@@ -192,9 +210,6 @@ export class Match {
       const inside = new Set(this.discs.filter(scoring).map(disc => disc.id));
       for (const disc of this.discs) {
         disc.x += disc.vx * step; disc.y += disc.vy * step;
-        const speed = Math.hypot(disc.vx, disc.vy);
-        const factor = speed ? Math.max(0, speed * 0.984 - 0.95) / speed : 0;
-        disc.vx *= factor; disc.vy *= factor;
       }
       for (let first = 0; first < this.discs.length; first++) {
         for (let second = first + 1; second < this.discs.length; second++) {
@@ -203,7 +218,11 @@ export class Match {
       }
       for (const disc of this.discs) {
         this.rebound(disc);
-        if (onColoredField(disc)) disc.entered = true;
+        // Resolve even a very slow contact before friction brings the disc to rest.
+        const speed = Math.hypot(disc.vx, disc.vy);
+        const factor = speed ? Math.max(0, speed * 0.984 - 0.95) / speed : 0;
+        disc.vx *= factor; disc.vy *= factor;
+        if (outsideHome(disc,disc.owner)) disc.leftHome = true;
         if (scoring(disc) && !inside.has(disc.id)) this.emit('enter', disc);
       }
       if (this.discs.every(disc => !disc.vx && !disc.vy)) this.settleTurn();

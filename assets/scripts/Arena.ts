@@ -1,7 +1,7 @@
 import { field, Impact, Match, pieceScale, Player, Point, radii, scoring, spawn } from './Match';
 import { fitBoard, haloPeak } from './BoardLayout';
 import { crackTime, drawShatter, shatterTime } from './Shatter';
-import { LaunchDrag } from './LaunchDrag';
+import { LaunchDrag, Shot } from './LaunchDrag';
 import { discColors, PlayerColors } from './PlayerColors';
 
 export interface Ink {
@@ -20,7 +20,7 @@ export type Sound = (name: string, force?: number, size?: number) => void;
 export const bounded = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 export class Arena {
   match = new Match();
-  private drag: LaunchDrag | null = null;
+  private drag: { stroke: LaunchDrag; center: Point } | null = null;
   effects: Flash[] = [];
   clock = 0;
   private arrival = 0;
@@ -49,28 +49,38 @@ export class Arena {
     const origin = this.shooterCenter();
     const hitRadius = radii[game.selected]*Math.min(1.55, 1+haloPeak*this.layout.haloSpread);
     if (Math.hypot(point.x-origin.x,point.y-origin.y) > Math.max(36*this.scale,hitRadius)) return false;
-    this.drag = new LaunchDrag(point, origin, field.height * 0.27, player === 0 ? field.bottom : field.top);
+    const radius = radii[game.selected];
+    const launchLine = player === 0 ? field.bottom+radius : field.top-radius;
+    this.drag = {
+      stroke: new LaunchDrag(point, origin, field.height * 0.27, launchLine),
+      center: origin
+    };
     this.sound('select'); return true;
   }
   move(point: Point) {
-    this.drag?.move(point);
-  }
-  private shooterCenter(velocity = this.drag?.release()?.velocity) {
+    if (!this.drag) return false;
+    const { stroke, center } = this.drag;
+    const shot = stroke.move(point);
     const {player, selected} = this.match;
-    let center = spawn(player,this.layout.shooterRow);
-    if (this.drag) {
-      const radius = radii[selected], lower = player === 0;
-      const safeEdge = this.layout.clearance - (this.layout.upperRow-this.layout.shooterRow);
-      const outer = this.layout.clearance ? Math.max(radius,safeEdge+radius*(1+0.53*this.layout.haloSpread)) : radius;
-      center = this.drag.center(radius, field.right-radius, lower ? field.bottom : outer,
-        lower ? field.height-outer : field.top);
-    }
-    return this.match.launchCenter(center,selected,velocity);
+    const radius = radii[selected];
+    const safeEdge = this.layout.clearance - (this.layout.upperRow-this.layout.shooterRow);
+    const outer = this.layout.clearance ? Math.max(radius,safeEdge+radius*(1+0.53*this.layout.haloSpread)) : radius;
+    const target = stroke.center(radius, field.right-radius, player === 0 ? radius : outer,
+      player === 0 ? field.height-outer : field.height-radius);
+    this.drag.center = this.match.dragCenter(center, target, selected);
+    return shot ? this.launch(shot) : false;
+  }
+  private shooterCenter() {
+    const {player, selected} = this.match;
+    return this.drag?.center ?? this.match.launchCenter(spawn(player,this.layout.shooterRow),selected);
   }
   up(point: Point) {
+    if (this.move(point)) return true;
+    return this.launch(this.drag?.stroke.release() ?? null);
+  }
+  private launch(shot: Shot | null) {
     if (!this.drag) return false;
-    this.move(point);
-    const shot = this.drag.release(), origin = this.shooterCenter(shot?.velocity), size = this.match.selected;
+    const origin = this.drag.center, size = this.match.selected;
     this.cancel();
     if (!shot || !this.match.fire(origin, shot.velocity)) return false;
     this.sound('release',shot.power,size);
@@ -124,10 +134,10 @@ export class Arena {
     if (showShooter && game.phase === 'ready' && !this.busy) {
       const where = this.shooterCenter(), radius = radii[game.selected];
       const offscreen = game.player === 0 ? field.height+radius*2 : -radius*2;
-      where.y += (offscreen-where.y)*Math.pow(1-this.arrival/flightTime,3);
+      const y = where.y + (offscreen-where.y)*Math.pow(1-this.arrival/flightTime,3);
       const pulse = this.drag ? 0 : (1+Math.sin(this.clock*2.8))*0.024;
-      [1.53+pulse,1.32+pulse/2,1.08].forEach((factor,index)=>ink.dot(where.x,where.y,radius*(1+(factor-1)*this.layout.haloSpread),this.colors[game.player].halo[index]));
-      ink.dot(where.x,where.y,radius,this.colors[game.player].disc);
+      [1.53+pulse,1.32+pulse/2,1.08].forEach((factor,index)=>ink.dot(where.x,y,radius*(1+(factor-1)*this.layout.haloSpread),this.colors[game.player].halo[index]));
+      ink.dot(where.x,y,radius,this.colors[game.player].disc);
     }
     for (const effect of this.effects) this.drawEffect(ink,effect);
   }

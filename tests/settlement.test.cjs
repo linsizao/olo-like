@@ -57,16 +57,16 @@ test('a bank shot that settles in the far strip is captured at its resting posit
 
 function place(game, owner, x, y, returns = 0) {
   const piece = game.stock[owner].pop();
-  const disc = { ...piece, x, y, owner, returns, entered: true, vx: 0, vy: 0 };
+  const disc = { ...piece, x, y, owner, returns, leftHome: true, collided: false, vx: 0, vy: 0 };
   game.discs.push(disc);
   return disc;
 }
 
-test('all four outcomes wait for the last moving disc, then resolve once together', () => {
+test('stock changes and misfires wait for the last moving disc, then resolve once together', () => {
   const game = new Match();
   const recovered = place(game, 0, 80, 920);
   const captured = place(game, 1, 210, 920);
-  const retired = place(game, 0, 350, 90, 3);
+  const reused = place(game, 0, 350, 90, 3);
   const runner = place(game, 1, 90, 600);
   runner.vx = 750;
   const shot = game.piece.id;
@@ -82,11 +82,12 @@ test('all four outcomes wait for the last moving disc, then resolve once togethe
   });
   assert.ok(waited, 'weak shot stopped while another disc was sliding');
   assert.deepEqual(events.filter(e => outcomes.has(e.cue)).map(e => [e.id, e.cue]), [
-    [recovered.id, 'return'], [captured.id, 'capture'], [retired.id, 'death'], [shot, 'misfire']
+    [recovered.id, 'return'], [captured.id, 'capture'], [reused.id, 'capture'], [shot, 'misfire']
   ]);
   assert.deepEqual(game.discs, [runner]);
+  assert.equal(game.stock[1].at(-1).returns,4);
   assert.deepEqual(game.stock[0].slice(-2).map(piece => piece.id), [recovered.id, captured.id]);
-  assert.equal(game.stats[0].deaths, 2);
+  assert.equal(game.stats[0].deaths, 1);
   game.advance(step);
   assert.deepEqual(game.events, []);
 });
@@ -102,4 +103,60 @@ test('a later collision can rescue a stopped disc in the opposing strip', () => 
   assert.equal(game.score()[0], 1);
   assert.equal(target.returns, 3);
   assert.ok(events.every(event => event.id !== target.id || !outcomes.has(event.cue)));
+});
+
+for (const player of [0,1]) {
+  const direction = player ? 1 : -1, y = player ? 70 : field.height-70;
+  for (const targetOwner of [0,1]) {
+    test(`player ${player}: contact with player ${targetOwner}'s ball protects a shot that stays home`, () => {
+      const game = new Match();
+      game.player = player;
+      const target = place(game,targetOwner,300,y+direction*(radii[2]+radii[0]+3));
+      const id = game.piece.id;
+      assert(game.fire({x:300,y},{x:0,y:direction*50}));
+      const shot = game.discs.at(-1);
+      const events = finishShot(game);
+      assert(events.some(e => e.cue==='hit'));
+      assert(shot.collided && target.collided && !shot.leftHome);
+      assert(events.some(e => e.cue==='return' && e.id===id));
+      assert.equal(game.stats[player].deaths,0);
+
+      // A returned disc must earn protection again on its next launch.
+      game.player = player;
+      assert(game.choose(game.stock[player].findIndex(piece => piece.id===id)));
+      assert(game.fire({x:560,y},{x:0,y:direction*50}));
+      assert(finishShot(game).some(e => e.cue==='misfire' && e.id===id));
+    });
+  }
+  test(`player ${player}: a quiet glancing impact still counts as a collision`, () => {
+    const game = new Match();
+    game.player = player;
+    const target = place(game,1-player,300,y);
+    const id = game.piece.id, x = target.x-radii[game.selected]-radii[target.size];
+    assert(game.fire({x,y},{x:1,y:direction*50}));
+    const events = finishShot(game);
+    assert.equal(game.stats[player].hits,0);
+    assert(events.some(e => e.cue==='return' && e.id===id));
+  });
+  test(`player ${player}: a wall rebound in the home strip protects the shot`, () => {
+    const game = new Match();
+    game.player = player;
+    const id = game.piece.id;
+    assert(game.fire({x:radii[game.selected]+2,y},{x:-60,y:direction*8}));
+    const events = finishShot(game);
+    assert(events.some(e => e.cue==='wall'));
+    assert(events.some(e => e.cue==='return' && e.id===id));
+  });
+}
+
+test('contact on the final step counts even when friction immediately stops both discs', () => {
+  const game = new Match(), y = field.height-65;
+  const target = place(game,1,300,y);
+  const id = game.piece.id;
+  const x = target.x-radii[game.selected]-radii[target.size]-0.001;
+  assert(game.fire({x,y},{x:50,y:0}));
+  game.discs.at(-1).vx = 0.5;
+  const events = finishShot(game);
+  assert(!events.some(e => e.cue==='hit'));
+  assert(events.some(e => e.id===id && e.cue==='return'));
 });

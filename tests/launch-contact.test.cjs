@@ -8,7 +8,7 @@ function setup(player, size, targetSize, x, y) {
   game.choose(game.stock[player].findIndex(p => p.size === size));
   const stock = game.stock[1-player];
   const [piece] = stock.splice(stock.findIndex(p => p.size === targetSize),1);
-  const target = {...piece,owner:1-player,entered:true,x,y,vx:0,vy:0};
+  const target = {...piece,owner:1-player,leftHome:true,collided:false,x,y,vx:0,vy:0};
   game.discs.push(target);
   return {game,target};
 }
@@ -26,7 +26,6 @@ for (const player of [0,1]) {
       edge.game.advance(step); normal.game.advance(step);
       assert(edge.target.vy*dir>0);
       assert.equal(normal.game.stats[player].hits,1);
-      // Normal flight applies one step of drag before contact instead of after it.
       assert(Math.abs(edge.target.vy-normal.target.vy)<1);
       assert.equal(edge.game.events.filter(e=>e.cue==='hit').length,1);
     }
@@ -53,5 +52,26 @@ for (const player of [0,1]) {
     assert(Math.hypot(shot.x-target.x,shot.y-target.y)>=2*radii[2]-1e-6);
     game.advance(step);
     assert(target.vy*dir>0);
+  });
+}
+
+for (const player of [0,1]) {
+  test(`player ${player}: a fast drag stops at the nearest disc and transfers the release impulse there`, () => {
+    const dir = player ? 1 : -1;
+    const from = {x:320,y:player ? 75 : field.height-75};
+    const to = {x:320,y:from.y+dir*680};
+    const {game,target} = setup(player,1,0,from.x,from.y+dir*200);
+    const farther = {...game.stock[player].pop(), owner:player, leftHome:true, collided:false,
+      x:from.x, y:from.y+dir*370, vx:0, vy:0};
+    game.discs.unshift(farther);
+    const contact = game.dragCenter(from,to,game.selected);
+    assert.equal(contact.y,target.y-dir*(radii[1]+radii[0]));
+    assert.deepEqual(game.dragCenter(contact,to,game.selected),contact);
+    assert.deepEqual(game.dragCenter(contact,from,game.selected),from);
+    assert.equal(target.vy,0);
+    assert(game.fire(contact,{x:0,y:dir*400}));
+    assert(target.vy*dir>0 && target.collided && game.discs.at(-1).collided);
+    assert.equal(farther.vy,0);
+    assert.equal(game.events.filter(e => e.cue==='hit').length,1);
   });
 }
