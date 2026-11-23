@@ -145,7 +145,7 @@ export class TouchAudio {
   }
   cue(name: string, force = 1, size = 1) {
     if (this.hidden) return;
-    if (this.options.haptic && (name === 'release' || name === 'shatter' || (name === 'hit' && force > 560))) {
+    if (this.options.haptic && (name === 'launchHaptic' || name === 'shatter' || (name === 'hit' && force > 560))) {
       const native = device();
       try { if (native?.vibrateShort) native.vibrateShort({type:'light'}); else host.navigator?.vibrate?.(12); } catch {}
     }

@@ -1,15 +1,17 @@
 export type Player = 0 | 1;
 export type Point = { x: number; y: number };
 export type Piece = { id: number; size: number; returns: number; origin: Player };
-export type Cue = 'hit' | 'wall' | 'enter' | 'gain' | 'loss' | 'return' | 'capture' | 'death' | 'misfire';
+export type Cue = 'release' | 'hit' | 'wall' | 'enter' | 'gain' | 'loss' | 'return' | 'capture' | 'death' | 'misfire';
 export type Impact = { cue: Cue; point: Point; player: Player; size: number; force: number; id: number };
-export type Disc = Point & Piece & { vx: number; vy: number; owner: Player; leftHome: boolean; collided: boolean };
+export type Disc = Point & Piece & { vx: number; vy: number; owner: Player; leftHome: boolean; collided: boolean; launchPower?: number };
 export const field = { left: 0, right: 768, top: 171, bottom: 853, middle: 512, height: 1024 };
 export const pieceScale = (width: number) => Math.min(1, width/768);
 export const radii = [16, 33, 50];
 const masses = [1, 2, 3.8];
 const speeds = [2.12, 1.96, 1.8];
 export const step = 1 / 120;
+const launchSpeed = (size: number, speed: number) => Math.min(2300,speed*speeds[size]);
+const slowed = (speed: number) => Math.max(0,speed*0.984-0.95);
 export const spawn = (player: Player, upperRow = field.top / 2): Point => ({ x: field.right / 2, y: player === 0 ? field.height-upperRow : upperRow });
 const onColoredField = (disc: Point) => disc.y >= field.top && disc.y <= field.bottom;
 const outsideHome = (point: Point, owner: Player) => owner === 0 ? point.y <= field.bottom : point.y >= field.top;
@@ -145,20 +147,45 @@ export class Match {
       this.emit('hit',second,force);
     }
   }
-  fire(origin: Point, velocity: Point) {
+  private checkDeparture(disc: Disc) {
+    if (disc.leftHome || !outsideHome(disc,disc.owner)) return;
+    disc.leftHome = true;
+    if (disc.launchPower !== undefined) this.emit('release',disc,disc.launchPower);
+  }
+  fire(origin: Point, velocity: Point, launchPower = 1) {
     const speed = Math.hypot(velocity.x, velocity.y);
     if (this.phase !== 'ready' || !Number.isFinite(speed) || speed < 48) return false;
     const piece = this.stock[this.player].splice(this.chosen, 1)[0];
     if (!piece) return false;
-    const factor = Math.min(2300 / speed, speeds[piece.size]);
+    const factor = launchSpeed(piece.size,speed) / speed;
     const center = this.launchCenter(origin,piece.size,velocity);
-    const shot = { ...center, ...piece, owner:this.player, leftHome:outsideHome(center,this.player), collided:false, vx:velocity.x*factor, vy:velocity.y*factor };
+    const shot = { ...center, ...piece, owner:this.player, leftHome:false, collided:false, launchPower, vx:velocity.x*factor, vy:velocity.y*factor };
     // Resolve touching discs before the first integration step can carry the shot past contact.
     for (const disc of this.discs) this.resolveContact(disc,shot);
     this.discs.push(shot);
+    this.checkDeparture(shot);
     if (scoring(shot)) this.emit('enter',shot);
     this.stats[this.player].shots++; this.shots++; this.phase = 'moving'; this.carry = 0; this.chosen = 0;
     return true;
+  }
+  extendLaunch(disc: Disc, origin: Point, velocity: Point, power: number) {
+    const current = Math.hypot(disc.vx,disc.vy);
+    if (this.phase !== 'moving' || disc.collided || !current || disc.launchPower === undefined) return false;
+    if (power <= disc.launchPower) return true;
+
+    // Use only the speed the longer stroke would still have at this position.
+    // Crediting distance already rolled would overshoot when input spans frames.
+    let speed = launchSpeed(disc.size,Math.hypot(velocity.x,velocity.y));
+    let travelled = Math.hypot(disc.x-origin.x,disc.y-origin.y);
+    while (travelled > 0 && speed > 0) {
+      const stride = speed*step;
+      speed += (slowed(speed)-speed) * Math.min(1,travelled/stride);
+      travelled -= stride;
+    }
+    disc.vx *= speed/current;
+    disc.vy *= speed/current;
+    disc.launchPower = power;
+    return power < 1;
   }
   private rebound(disc: Disc) {
     const radius = radii[disc.size];
@@ -220,9 +247,9 @@ export class Match {
         this.rebound(disc);
         // Resolve even a very slow contact before friction brings the disc to rest.
         const speed = Math.hypot(disc.vx, disc.vy);
-        const factor = speed ? Math.max(0, speed * 0.984 - 0.95) / speed : 0;
+        const factor = speed ? slowed(speed) / speed : 0;
         disc.vx *= factor; disc.vy *= factor;
-        if (outsideHome(disc,disc.owner)) disc.leftHome = true;
+        this.checkDeparture(disc);
         if (scoring(disc) && !inside.has(disc.id)) this.emit('enter', disc);
       }
       if (this.discs.every(disc => !disc.vx && !disc.vy)) this.settleTurn();

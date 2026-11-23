@@ -74,7 +74,12 @@ export class Table {
     this.slide('pause','pause',gap,wash);
     this.sound('pause');
   }
-  private resume() { this.slide('resume','play',pauseGap,1); this.sound('resume'); }
+  private resume() {
+    const gap = this.seamGap ?? pauseGap;
+    this.seamGap = null;
+    this.slide('resume','play',gap,gap/pauseGap);
+    this.sound('resume');
+  }
   private leave() {
     if (this.page==='pause') this.slide('leave','menu',this.motion?.gap??pauseGap,this.motion?.wash??1);
     else this.go('menu');
@@ -95,13 +100,19 @@ export class Table {
   background() { if (this.page==='play') this.pause(); this.cancel(); this.audio.sleep(true); }
   foreground() { this.audio.sleep(false); }
   cancel() {
-    if (this.seamGap) this.motion = new BoardTransition('resume',this.seamGap,this.seamGap/pauseGap);
+    const paused = this.page==='pause';
+    if (this.seamGap!==null && this.seamGap!==(paused?pauseGap:0)) {
+      this.motion = new BoardTransition(paused?'pause':'resume',this.seamGap,this.seamGap/pauseGap);
+    }
     this.seamGap = null;
     this.arena.cancel(); this.pressed=''; this.start=null; this.slider=null; this.revision++;
   }
   private hit(point:Point) { return this.controls.find(control=>Math.abs(point.x-control.x)<=control.width/2 && Math.abs(point.y-control.y)<=control.height/2); }
   private startsAtSeam(point: Point) {
-    return Math.abs(point.y-field.middle) <= seamHitRadius;
+    const distance = Math.abs(point.y-field.middle);
+    if (this.page==='play') return distance <= seamHitRadius;
+    return this.page==='pause' && Math.abs(distance-pauseGap*field.middle) <= seamHitRadius &&
+      Math.abs(point.x-field.right/2) <= 28*pieceScale(field.right)+seamHitRadius;
   }
   down(point:Point) {
     this.audio.unlock(); this.start=point; this.revision++;
@@ -124,17 +135,19 @@ export class Table {
     if (this.slider) { this.setVolume(point); return; }
     if (this.pressed) return;
     if (this.page === 'rules') this.scroll=bounded(this.scrollStart+this.start.y-point.y,0,(rules.length-1)*105-535);
-    if (this.page === 'play') {
-      if (this.startsAtSeam(this.start)) {
-        const dy = Math.abs(point.y-this.start.y);
-        if (this.seamGap === null) {
-          const dx = Math.abs(point.x-this.start.x);
-          if (Math.max(dx,dy) <= seamSlop) return;
-          if (dx > dy) { this.start = null; return; }
-        }
-        this.seamGap = bounded((dy-seamSlop)/field.middle,0,pauseGap);
-      } else this.arena.move(point);
-    }
+    if (this.startsAtSeam(this.start)) {
+      const dy = point.y-this.start.y;
+      const paused = this.page==='pause';
+      const distance = paused ? dy*Math.sign(field.middle-this.start.y) : Math.abs(dy);
+      if (this.seamGap===null) {
+        const dx = Math.abs(point.x-this.start.x);
+        if (Math.max(dx,Math.abs(dy)) <= seamSlop) return;
+        if (dx > Math.abs(dy)) { this.start=null; return; }
+        if (distance <= seamSlop) return;
+      }
+      const travel = bounded((distance-seamSlop)/field.middle,0,pauseGap);
+      this.seamGap = paused ? pauseGap-travel : travel;
+    } else if (this.page==='play') this.arena.move(point);
     this.revision++;
   }
   up(point:Point) {
@@ -143,8 +156,11 @@ export class Table {
     this.move(point);
     if (!this.start) return;
     if (this.seamGap !== null) {
-      if (this.seamGap*field.middle >= pausePullDistance) this.pause();
-      else this.cancel();
+      const paused = this.page==='pause';
+      const travel = paused ? pauseGap-this.seamGap : this.seamGap;
+      if (travel*field.middle < pausePullDistance) this.cancel();
+      else if (paused) this.resume();
+      else this.pause();
       return;
     }
     const pressed=this.pressed, hit=this.hit(point), slider=this.slider;
@@ -247,6 +263,15 @@ export class Table {
         if (gap>0 && shadow>0) ink.rect(0,field.middle*(1-gap),width,field.height*gap,
           '#000000'+Math.round(shadow*255).toString(16).padStart(2,'0'));
         this.arena.draw(splitInk(ink,gap,wash,this.arena.colors),kind!=='enter' && kind!=='next');
+        if (showPause && gap>0) {
+          const half = 28*scale, radius = 2*scale;
+          const grip = blendColor(colors.paper,colors.muted,wash*.72);
+          for (const y of [field.middle*(1-gap),field.middle*(1+gap)]) {
+            ink.rect(center-half,y-radius,half*2,radius*2,grip);
+            ink.dot(center-half,y,radius,grip);
+            ink.dot(center+half,y,radius,grip);
+          }
+        }
       }
       return;
     }

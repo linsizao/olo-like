@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { LaunchDrag } = require('../assets/scripts/LaunchDrag.ts');
-const { Match, field, radii, spawn } = require('../assets/scripts/Match.ts');
+const { Match, field, radii, spawn, step } = require('../assets/scripts/Match.ts');
 
 const reach = field.height * 0.27;
 function push(gesture, x, y) { gesture.move({ x, y }); }
@@ -93,6 +93,53 @@ for (const player of [0, 1]) {
   const line = player ? field.top-radius : field.bottom+radius;
   const bounds = [radius, field.right-radius, radius, field.height-radius];
 
+  test(`player ${player}: holding still before a flick leaves its velocity and stopping point unchanged`, () => {
+    const from = {x:320,y:line-dir*27};
+    function replay(hold, interval, firstMove, reposition) {
+      const game = new Match();
+      game.player = player;
+      const initial = reposition ? {x:from.x-75,y:from.y} : from;
+      const drag = new LaunchDrag(initial,initial,reach,line,0);
+      if (reposition) drag.move(from,15);
+      if (hold) assert.equal(drag.move(from,hold/2),null);
+      let shot;
+      for (let i=0; !shot && i<10; i++) {
+        const p = {x:from.x+2*(i+1), y:from.y+dir*8*(i+1)};
+        shot = drag.move(p,(reposition ? 15 : 0)+hold+firstMove+i*interval);
+      }
+      assert(shot);
+      assert(Math.abs(shot.velocity.y - dir*1290*32/reach)<1e-8);
+      const start = drag.center(...bounds);
+      assert(game.fire(start,shot.velocity,shot.power));
+      const disc = game.discs[0];
+      const velocity = [disc.vx,disc.vy];
+      for (let i=0; i<1200 && game.phase==='moving'; i++) game.advance(step);
+      assert.notEqual(game.phase,'moving');
+      return {velocity, power:shot.power, x:disc.x, y:disc.y};
+    }
+    for (const interval of [8,12,32]) for (const reposition of [false,true]) {
+      const direct = replay(0,interval,interval,reposition);
+      assert.deepEqual(replay(1200,interval,interval,reposition),direct);
+      assert.deepEqual(replay(0,interval,0,reposition),direct);
+    }
+  });
+
+  test(`player ${player}: a single movement spanning the line uses the same distance after a hold`, () => {
+    const from = {x:320,y:line-dir*27};
+    for (const travel of [72,310]) {
+      const end = {x:from.x,y:from.y+dir*travel};
+      const shot = hold => {
+        const drag = new LaunchDrag(from,from,reach,line,0);
+        const fired = drag.move(end,hold+16);
+        assert(fired);
+        assert.deepEqual(drag.center(...bounds),{x:from.x,y:line});
+        return fired;
+      };
+      assert.deepEqual(shot(1500),shot(0));
+      assert.equal(shot(0).power,Math.min(1,travel/reach));
+    }
+  });
+
   test(`player ${player}: an in-strip reversal cancels the forward stroke and allows repositioning`, () => {
     const origin = spawn(player);
     const drag = new LaunchDrag(origin,origin,reach,line,0);
@@ -121,29 +168,68 @@ for (const player of [0, 1]) {
     assert.deepEqual(drag.center(...bounds),contact);
   });
 
-  test(`player ${player}: fast flicks can reach full power even with a short launch strip`, () => {
-    function swipe(speed,steps) {
-      const from = {x:field.right/2,y:line-dir*27};
-      const drag = new LaunchDrag(from,from,reach,line,0);
-      for (let i=1;i<=steps;i++) {
-        const distance = 96*i/steps;
-        const shot = drag.move({x:from.x,y:from.y+dir*distance},1000*distance/speed);
-        if (distance<27) assert.equal(shot,null);
-        else {
-          assert(shot);
-          assert.deepEqual(drag.center(...bounds),{x:from.x,y:line});
-          assert.equal(shot.velocity.x,0);
-          assert.equal(Math.sign(shot.velocity.y),dir);
-          return shot;
+  test(`player ${player}: short and long swipes use the original distance curve at any sampling rate`, () => {
+    const from = {x:320,y:line-dir*27};
+    function roll(distance, samples, ticks) {
+      const game = new Match();
+      game.player = player;
+      const drag = new LaunchDrag(from,from,reach,line);
+      let disc, origin, heading;
+      for (let i=1; i<=samples; i++) {
+        const p = {x:from.x,y:from.y+dir*distance*i/samples};
+        if (disc) {
+          const more = drag.followThrough(p,heading);
+          assert(more);
+          game.extendLaunch(disc,origin,more.velocity,more.power);
+        } else {
+          const shot = drag.move(p);
+          if (!shot) continue;
+          origin = drag.center(...bounds);
+          assert.deepEqual(origin,{x:from.x,y:line});
+          heading = shot.velocity;
+          assert(game.fire(origin,heading,shot.power));
+          disc = game.discs[0];
         }
+        game.advance(ticks*step);
+        assert((disc.y-line)*dir>0,'the disc moves while the finger is still down');
       }
-      assert.fail('Swipe reached the field while still held');
+      const power = Math.min(1,distance/reach);
+      assert(Math.abs(disc.launchPower-power)<1e-10);
+      const reference = new Match();
+      reference.player = player;
+      assert(reference.fire(origin,{x:0,y:dir*1290*power},power));
+      const expected = reference.discs[0];
+      while (reference.phase==='moving') reference.advance(step);
+      while (game.phase==='moving') game.advance(step);
+      // The exact wall-contact frame can differ when the disc starts rolling earlier.
+      assert(Math.abs(disc.y-expected.y) < (disc.collided ? 4 : 0.02));
+      assert.equal(game.shots,1);
     }
-    const slow = swipe(240,16), medium = swipe(1000,16), fast = swipe(1600,16);
-    assert(slow.power>0 && slow.power<medium.power && medium.power<1);
-    assert.equal(fast.power,1);
-    assert(Math.abs(swipe(1000,1).power-medium.power)<1e-9);
-    assert.equal(swipe(1600,1).power,1);
+    for (const distance of [36,96,180,310]) {
+      for (const samples of [1,8,32]) for (const ticks of [1,2]) roll(distance,samples,ticks);
+    }
+  });
+
+  test(`player ${player}: sideways or reversed follow-through cannot steer, and contact ends the push`, () => {
+    const from = {x:320,y:line-dir*27}, end = {x:320,y:line+dir*6};
+    for (const stray of [{x:350,y:end.y},{x:320,y:end.y-dir*12}]) {
+      const drag = new LaunchDrag(from,from,reach,line);
+      const shot = drag.move(end);
+      assert(shot);
+      assert.equal(drag.followThrough(stray,shot.velocity),null);
+    }
+    const game = new Match();
+    game.player = player;
+    const target = game.stock[1-player].pop();
+    game.discs.push({...target,x:320,y:line+dir*(radius+radii[target.size]),
+      owner:1-player,vx:0,vy:0,collided:false,leftHome:true});
+    const origin = {x:320,y:line};
+    assert(game.fire(origin,{x:0,y:dir*200},0.2));
+    const disc = game.discs.at(-1);
+    assert(disc.collided);
+    const before = [disc.x,disc.y,disc.vx,disc.vy];
+    assert.equal(game.extendLaunch(disc,origin,{x:0,y:dir*1290},1),false);
+    assert.deepEqual([disc.x,disc.y,disc.vx,disc.vy],before);
   });
 }
 

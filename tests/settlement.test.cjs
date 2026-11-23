@@ -20,6 +20,34 @@ function finishShot(game, observe = () => {}) {
 }
 
 for (const owner of [0, 1]) {
+  test(`player ${owner}: release sounds on the first departure even if the shot crosses home twice`, () => {
+    const game = new Match();
+    game.player = owner;
+    game.choose(2);
+    const dir = owner ? 1 : -1, line = owner ? field.top : field.bottom;
+    const target = game.stock[1-owner].shift();
+    game.discs.push({...target, owner:1-owner, leftHome:true, collided:false,
+      x:300,y:line+dir*105,vx:0,vy:0});
+    const power = 0.93;
+    assert(game.fire({x:300,y:line-dir*48},{x:0,y:dir*1290*power},power));
+    const shot = game.discs.at(-1), crossings = [];
+    assert.equal(game.events.length,0);
+    let outside = false;
+    finishShot(game, events => {
+      const nowOutside = (shot.y-line)*dir >= 0;
+      const firstDeparture = nowOutside && crossings.length===0;
+      if (nowOutside !== outside) crossings.push(nowOutside);
+      const releases = events.filter(e => e.cue==='release');
+      assert.equal(releases.length, firstDeparture ? 1 : 0);
+      if (releases.length) {
+        assert.deepEqual(releases[0],{cue:'release',id:shot.id,player:owner,size:shot.size,
+          force:power,point:{x:shot.x,y:shot.y}});
+      }
+      outside = nowOutside;
+    });
+    assert.deepEqual(crossings,[true,false,true]);
+  });
+
   test('player ' + owner + ' can bank off the far rail and keep the disc in play', () => {
     const game = new Match();
     game.player = owner;
@@ -118,6 +146,7 @@ for (const player of [0,1]) {
       const events = finishShot(game);
       assert(events.some(e => e.cue==='hit'));
       assert(shot.collided && target.collided && !shot.leftHome);
+      assert(!events.some(e => e.cue==='release'));
       assert(events.some(e => e.cue==='return' && e.id===id));
       assert.equal(game.stats[player].deaths,0);
 
@@ -125,7 +154,9 @@ for (const player of [0,1]) {
       game.player = player;
       assert(game.choose(game.stock[player].findIndex(piece => piece.id===id)));
       assert(game.fire({x:560,y},{x:0,y:direction*50}));
-      assert(finishShot(game).some(e => e.cue==='misfire' && e.id===id));
+      const nextEvents = finishShot(game);
+      assert(nextEvents.some(e => e.cue==='misfire' && e.id===id));
+      assert(!nextEvents.some(e => e.cue==='release'));
     });
   }
   test(`player ${player}: a quiet glancing impact still counts as a collision`, () => {

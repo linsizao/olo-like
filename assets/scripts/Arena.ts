@@ -1,4 +1,4 @@
-import { field, Impact, Match, pieceScale, Player, Point, radii, scoring, spawn } from './Match';
+import { Disc, field, Impact, Match, pieceScale, Player, Point, radii, scoring, spawn } from './Match';
 import { fitBoard, haloPeak } from './BoardLayout';
 import { crackTime, drawShatter, shatterTime } from './Shatter';
 import { LaunchDrag, Shot } from './LaunchDrag';
@@ -21,6 +21,7 @@ export const bounded = (value: number, min: number, max: number) => Math.max(min
 export class Arena {
   match = new Match();
   private drag: { stroke: LaunchDrag; center: Point } | null = null;
+  private follow: { stroke: LaunchDrag; disc: Disc; origin: Point; heading: Point } | null = null;
   effects: Flash[] = [];
   clock = 0;
   private arrival = 0;
@@ -28,7 +29,7 @@ export class Arena {
   constructor(private sound: Sound, readonly colors: PlayerColors) {}
   get scale() { return pieceScale(field.right); }
   get busy() { return this.effects.some(effect => effect.cue !== 'hit'); }
-  cancel() { this.drag = null; }
+  cancel() { this.drag = null; this.follow = null; }
   private reserves(player: Player) {
     const active = this.match.phase === 'ready' && this.match.player === player;
     return this.match.stock[player].map((piece,index)=>({piece,index})).filter(entry=>!active || entry.index!==this.match.chosen);
@@ -38,6 +39,7 @@ export class Arena {
     return player === 0 ? offset : field.right-offset;
   }
   down(point: Point) {
+    this.follow = null;
     const game = this.match;
     if (game.phase !== 'ready' || this.busy || this.arrival < flightTime) return false;
     const player = game.player, diff = Math.abs(point.y-spawn(player,this.layout.upperRow).y);
@@ -58,6 +60,12 @@ export class Arena {
     this.sound('select'); return true;
   }
   move(point: Point) {
+    if (this.follow) {
+      const {stroke,disc,origin,heading} = this.follow;
+      const shot = stroke.followThrough(point,heading);
+      if (!shot || !this.match.extendLaunch(disc,origin,shot.velocity,shot.power)) this.follow = null;
+      return false;
+    }
     if (!this.drag) return false;
     const { stroke, center } = this.drag;
     const shot = stroke.move(point);
@@ -68,22 +76,27 @@ export class Arena {
     const target = stroke.center(radius, field.right-radius, player === 0 ? radius : outer,
       player === 0 ? field.height-outer : field.height-radius);
     this.drag.center = this.match.dragCenter(center, target, selected);
-    return shot ? this.launch(shot) : false;
+    return shot ? this.launch(shot,true) : false;
   }
   private shooterCenter() {
     const {player, selected} = this.match;
     return this.drag?.center ?? this.match.launchCenter(spawn(player,this.layout.shooterRow),selected);
   }
   up(point: Point) {
-    if (this.move(point)) return true;
-    return this.launch(this.drag?.stroke.release() ?? null);
+    const fired = this.move(point) || this.launch(this.drag?.stroke.release() ?? null);
+    this.follow = null;
+    return fired;
   }
-  private launch(shot: Shot | null) {
+  private launch(shot: Shot | null, follow = false) {
     if (!this.drag) return false;
-    const origin = this.drag.center, size = this.match.selected;
+    const {center,stroke} = this.drag;
     this.cancel();
-    if (!shot || !this.match.fire(origin, shot.velocity)) return false;
-    this.sound('release',shot.power,size);
+    if (!shot || !this.match.fire(center, shot.velocity, shot.power)) return false;
+    if (follow && shot.power < 1) {
+      const disc = this.match.discs[this.match.discs.length-1];
+      this.follow = {stroke,disc,origin:{x:disc.x,y:disc.y},heading:shot.velocity};
+    }
+    this.sound('launchHaptic');
     return true;
   }
   tick(dt: number) {
